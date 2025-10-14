@@ -1,10 +1,8 @@
+import numpy as np
 from nptdms import TdmsFile
 import matplotlib.pyplot as plt
 from scipy.signal import butter, lfilter, freqz, find_peaks
 from scipy.fft import fft, ifft, fftfreq, fftshift, rfft
-import numpy as np
-
-# from typing import String
 
 
 def butter_lowpass(cutoff, fs, order=5):
