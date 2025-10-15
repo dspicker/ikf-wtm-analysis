@@ -93,7 +93,7 @@ class WtmData:
 def plot_pitches_histogram(data: WtmData):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.set_title("Wire Pitch Histogram")
-    ax.hist(data.wire_pitches, bins=24, range=(-0.125, 5.875))
+    ax.hist(data.wire_pitches, bins=72, range=(-0.125, 5.875))
     ax.grid(axis="y", which="major", linestyle="-", alpha=0.4)
     # ax.set_ylabel("Number of wires")
     ax.set_xlabel("Wire pitch /mm")
@@ -140,29 +140,43 @@ def plot_wire_positions(data: WtmData):
     plt.show()
 
 
-def analyse_tension():
+def analyse_tension(data: WtmData):
+    print("Analysing wire tensions. This may take some time")
     wire_tensions = list()
     for i in range(data.num_wires):
         x, y = data.do_fft(data.get_spectrum(i))
         freq = data.find_frequency(x, y)
         tension = data.calculate_wire_tension(freq)
         wire_tensions.append(tension)
-        #if tension == 0.0:
+        # if tension == 0.0:
         #    print(i)
 
+    stats = describe(wire_tensions)
+    print("Wire Tension Analysis finished:")
+    print(f" mean = {stats.mean:.4f} N, variance = {stats.variance:.5f} N")
+
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(data.wire_positions, wire_tensions, ".-", linewidth=0.6)
+    ax.plot(range(data.num_wires), wire_tensions, ".-", linewidth=0.6)
     ax.grid(True)
     ax.set_title("Wire Tension Measurement")
     ax.set_ylabel("Wire tension /N")
-    ax.set_xlabel("Wire position /m")
+    ax.set_xlabel("Wire number")
+    ax.text(
+        0.95,
+        0.95,
+        f"total {data.num_wires} wires\n mean = {stats.mean:.4f} N\nvariance = {stats.variance:.5f} N",
+        horizontalalignment="right",
+        verticalalignment="top",
+        transform=ax.transAxes,
+    )
     plt.show()
 
 
 if __name__ == "__main__":
-    data = WtmData("daten2/WTD-Vibration-20230705-120352.tdms")
+    # data = WtmData("daten2/WTD-Vibration-20230705-120352.tdms")
+    data = WtmData("daten_bp1-007/WTD-Vibration-20251015-102505.tdms")
     # plot_pitches_histogram(data)
-    # plot_wire_positions(data)
+    plot_wire_positions(data)
 
     # spec = data.get_spectrum(317)
     # fig, ax = plt.subplots(figsize=(10, 6))
@@ -171,4 +185,4 @@ if __name__ == "__main__":
 
     # x,y = data.do_fft(data.get_spectrum(317))
     # freq = data.find_frequency(x,y)
-    analyse_tension()
+    # analyse_tension(data)
