@@ -5,10 +5,13 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker
 from scipy.stats import describe
 from scipy.fft import fft, fftshift, fftfreq
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, butter, lfilter
 
 
 DEBUG = False
+
+sampling_rate = 100.0e3  # 100 kHz
+sample_duration = 1.5  # seconds
 
 
 class WtmData:
@@ -20,10 +23,11 @@ class WtmData:
         self._read_tdms(tdms_file_path)
 
         self.wire_pitches = self._calc_wire_pitches()
-        self.wp_statistics = describe(self.wire_pitches)
-        print(
-            f"Wire pitch: mean={self.wp_statistics.mean:.3f} mm, variance={self.wp_statistics.variance:.3f} mm"
-        )
+        if self.wire_pitches:
+            self.wp_statistics = describe(self.wire_pitches[1:]) # achtung erster draht wird ignoriert mit [1:]
+            print(
+                f"Wire pitch: mean={self.wp_statistics.mean:.3f} mm, variance={self.wp_statistics.variance:.3f} mm"
+            )
 
     def _read_tdms(self, tdms_file_path: str):
         tdms_file_path = os.path.abspath(tdms_file_path)
@@ -73,22 +77,32 @@ class WtmData:
 """ ----------- Analysis Functions ----------- """
 
 
+def filter_spectrum(spectrum: np.ndarray):
+    # comupte running mean over N samples:
+    N = 30
+    rm_spect = np.convolve(spectrum, np.ones(N) / N, mode="valid")
+    return rm_spect
+
+
 def do_fft(spectrum: np.ndarray):
+    sample_spacing = 1.0 / sampling_rate  # seconds
     fft_ampl = fftshift(fft(spectrum, norm="forward"))
-    fft_freq = fftshift(fftfreq(spectrum.size, 1.0e-05))  # sampling rate
+    fft_freq = fftshift(fftfreq(spectrum.size, sample_spacing))
     nentries = spectrum.size // 2
     fft_freq = fft_freq[nentries:]  # use only positive half of freq spectrum
     fft_ampl = np.absolute(fft_ampl)[nentries:]
     fft_ampl = fft_ampl / fft_ampl[0]  # normalization
     if DEBUG:
+        freq_incr = fft_freq[1] - fft_freq[0]
         print(" -| do_fft()")
-        print(f"  | frequency increment = {fft_freq[1] - fft_freq[0]:.3f}")
+        print(f"  | frequency increment = {freq_incr:.3f}")
         print(f"  | entries in frequency spectrum: {nentries}")
+
     return fft_freq, fft_ampl
 
 
 def find_frequency(x_vals: np.ndarray, y_vals: np.ndarray):
-    search_interval = [60.0, 200.0]  # Min and max frequency in Hz
+    search_interval = [40.0, 250.0]  # Min and max frequency in Hz
     search_indices = [
         int(i // (x_vals[1] - x_vals[0])) for i in search_interval
     ]  # indices of interval values
@@ -120,6 +134,8 @@ def find_frequency(x_vals: np.ndarray, y_vals: np.ndarray):
 def calculate_wire_tension(frequency: float, harmonic: int = 1):
     wire_rho = 19289.58  # kg / m^3
     wire_radius = 10 * 10**-6  # m
+    #wire_rho = 19020.0  # kg / m^3
+    #wire_radius = (20.11 / 2 ) * 10**-6  # m
     wire_length = 1.4  # m
     tension = (
         4
@@ -176,6 +192,7 @@ def plot_pitches_histogram(data: WtmData):
         horizontalalignment="right",
         verticalalignment="top",
         transform=ax.transAxes,
+        bbox={'facecolor': 'white', 'alpha': 0.8, 'pad': 5}
     )
     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(0.5))
     ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(0.25, -0.125))
@@ -188,7 +205,7 @@ def plot_wire_positions(data: WtmData):
         2,
         1,
         sharex=True,
-        figsize=(15, 8),
+        figsize=(10, 6),
         gridspec_kw={
             "height_ratios": [1, 2],
             "hspace": 0.05,
@@ -219,12 +236,13 @@ def plot_wire_tensions(wire_tensions: list[float]):
     ax.set_ylabel("Wire tension /N")
     ax.set_xlabel("Wire number")
     ax.text(
-        0.95,
-        0.95,
+        0.25,
+        0.25,
         f"total {len(wire_tensions)} wires\n mean = {stats.mean:.4f} N\nvariance = {stats.variance:.5f} N",
         horizontalalignment="right",
         verticalalignment="top",
         transform=ax.transAxes,
+        bbox={'facecolor': 'white', 'alpha': 0.8, 'pad': 5}
     )
     # plt.show()
 
@@ -232,23 +250,23 @@ def plot_wire_tensions(wire_tensions: list[float]):
 """ -----------     Misc      ----------- """
 
 
-def test(data):
-    spec = data.get_power_spectrum(32)
-    peaks, _ = find_peaks(spec, distance=40.0, prominence=40.0)
-    tensions = list()
-    for i in range(len(peaks)):
-        freq = peaks[i] * 2
-        tension = calculate_wire_tension(freq, i + 1)
-        tensions.append(tension)
-        if i == 1:
-            break
-    mean_tension = np.mean(tensions)
-    print(tensions)
-    print(mean_tension)
+def test(data: WtmData, wire_no: int):
+    spec = data.get_power_spectrum(wire_no)
+    # peaks, _ = find_peaks(spec, distance=40.0, prominence=40.0)
+    # tensions = list()
+    # for i in range(len(peaks)):
+    #    freq = peaks[i] * 2
+    #    tension = calculate_wire_tension(freq, i + 1)
+    #    tensions.append(tension)
+    #    if i == 1:
+    #        break
+    # mean_tension = np.mean(tensions)
+    # print(tensions)
+    # print(mean_tension)
 
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(range(0, len(spec) * 2, 2), spec, ".-", linewidth=0.6)
-    ax.plot(peaks * 2, spec[peaks], "x")
+    # ax.plot(peaks * 2, spec[peaks], "x")
     ax.set_xlim(0.0, 400.0)
     # plt.show()
 
@@ -256,12 +274,56 @@ def test(data):
 def analyse_single_wire(data: WtmData, wire_no: int):
     global DEBUG
     DEBUG = True
-    x, y = do_fft(data.get_spectrum(wire_no))
+    spect = data.get_spectrum(wire_no)
+    spect = filter_spectrum(spect)
+    x, y = do_fft(spect)
     freq = find_frequency(x, y)
     tension = calculate_wire_tension(freq)
     print(f" -| analyse_single_wire(wire_no={wire_no})")
-    print(f"  | tension = {tension:.4f} N")
+    print(f"  | tension = {tension * 100:.2f} cN")
     DEBUG = False
+
+
+def analyse_signal(data: WtmData, wire_no: int):
+    sample_spacing = 1.0 / sampling_rate  # seconds
+    spectrum = data.get_spectrum(wire_no)
+
+    #butter_out = butter(4, 5000, fs=100000)
+    #b, a = butter_out
+    #filtered_spect = lfilter(b, a, spectrum)
+
+    # comupte running mean over N samples:
+    #N = 30
+    #rm_spect = np.convolve(spectrum, np.ones(N) / N, mode="valid")
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    x_vals = [float(x) * sample_spacing for x in range(0, len(spectrum))]
+    #x_filtered = [float(x) * sample_spacing for x in range(0, len(filtered_spect))]
+    #x_rm = [float(x) * sample_spacing for x in range(0, len(rm_spect))]
+    # y_oszi = [oszillator(x, 92.0) for x in x_vals]
+    ax.plot(x_vals, spectrum, "-", linewidth=0.7)
+    #ax.plot(x_filtered, filtered_spect, "-", linewidth=0.7)
+    #ax.plot(x_rm, rm_spect, "-", linewidth=0.7)
+    # ax.plot(x_vals,y_oszi, "-", linewidth=0.5, alpha=0.9)
+    ax.grid(True)
+    ax.set_title("Sensor Signal")
+    ax.set_xlabel("Time /s")
+    ax.set_ylabel("Signal /V")
+    # ax.set_xlim(0.15)
+
+    # print(f"y mean value = {np.mean(spectrum)}")
+
+
+def oszillator(t: float, freq: float):
+    y_offset = 1.55
+
+    r = 5.0
+    amplitude = 0.6
+    omega = 2 * np.pi * freq
+    phi = 300.0 * np.pi / 180.0
+    sinus = amplitude * np.cos(omega * t + phi) * np.exp(-t * r)
+
+    return y_offset + sinus
 
 
 """ ----------- Main Function ----------- """
@@ -269,13 +331,37 @@ def analyse_single_wire(data: WtmData, wire_no: int):
 if __name__ == "__main__":
     # data = WtmData("daten2/WTD-Vibration-20230705-120352.tdms")
     # my_data = WtmData("daten_bp1-007/WTD-Vibration-20251015-102505.tdms")
-    my_data = WtmData("daten_bp1-007/WTD-Vibration-20251016-111956.tdms")
+    # my_data = WtmData("daten_bp1-007/WTD-Vibration-20251016-111956.tdms")
 
-    # plot_pitches_histogram(my_data)
-    # plot_wire_positions(my_data)
-    # tensions = analyse_tension(my_data)
-    # plot_wire_tensions(tensions)
+    # zweite Hälfte Goldwicklung
+    #my_data = WtmData("daten_bp1-007_b/WTD-Vibration-20251103-131030.tdms")
 
-    analyse_single_wire(my_data, 10)
+    # Einzelner Draht mit Gewicht
+    #my_data = WtmData("test_daten/WTD-Vibration-20251030-154035.tdms")
+
+    # Einzelner Draht im Teststand mit Federwaage
+    #my_data = WtmData("2026_01_14_test/WTD-Vibration-20260115-170028.tdms")
+
+    #measurements = ["2026_01_14_test/WTD-Vibration-20260114-130738.tdms",
+    #                "2026_01_14_test/WTD-Vibration-20260114-132106.tdms",
+    #                "2026_01_14_test/WTD-Vibration-20260114-134532.tdms"]
+    #
+    #my_data = WtmData(measurements[2])
+
+    my_data = WtmData("2026_01 Drahtspannung Testwicklung/WTD-Vibration-20260211-133449.tdms")
+    plot_pitches_histogram(my_data)
+    plot_wire_positions(my_data)
+    tensions = analyse_tension(my_data)
+    plot_wire_tensions(tensions)
+
+    # print(
+    #    f"Wire tension calculated: 9.81 kg*m/s^2 * 0.0509 kg = {9.81 * 0.0509 * 100:.2f} cN"
+    # )
+
+    #wire = 0
+    #for wire in range(1):
+    #    analyse_single_wire(my_data, wire)
+    #    analyse_signal(my_data, wire)
+    # test(my_data, wire)
 
     plt.show()
