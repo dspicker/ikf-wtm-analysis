@@ -22,9 +22,13 @@ class WtmProfile:
 
 
 if __name__ == "__main__":
-    data = WtmProfile("daten_bp1-007/WTD-Profile-20251013-145459.tdms")
-
+    #data = WtmProfile("daten_bp1-007/WTD-Profile-20251013-145459.tdms")
+    data = WtmProfile("data/2026_01 Drahtspannung Testwicklung/WTD-Profile-20260211-133326.tdms")
+    #print(data.x_profile_led)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(data.x_profile_led)
-    # ax.plot(data.x_profile_locations)
+    #ax.plot(data.x_profile_led, ".")
+    ax.plot(data.x_profile_locations, data.x_profile_amplitudes, "o")
+    #ax.plot(data.x_profile_amplitudes)
+    #ax.plot(data.x_profile_gaps, ".")
+    ax.grid(True)
     plt.show()
