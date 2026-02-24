@@ -1,3 +1,4 @@
+import sys
 import os.path
 import numpy as np
 from nptdms import TdmsFile
@@ -45,9 +46,11 @@ class WtmData:
             tdms_file_path (str): file path given to the constructor
         """
         tdms_file_path = os.path.abspath(tdms_file_path)
-        if os.path.isfile(tdms_file_path):
-            print(f"Loading tdms file  {tdms_file_path} ")
-            self.file_path = tdms_file_path
+        if not os.path.isfile(tdms_file_path):
+            print(f"Error. File not found:  {tdms_file_path}")
+            sys.exit()
+        print(f"Loading tdms file  {tdms_file_path} ")
+        self.file_path = tdms_file_path
         with TdmsFile.read_metadata(tdms_file_path) as tdms_file:
             all_groups = tdms_file.groups()  # One group per wire
             self.num_wires = len(all_groups)
@@ -216,6 +219,7 @@ class WtmData:
         """Main analysis loop"""
         self.wire_tensions.clear()
         self.tensions_binsizes.clear()
+        print("Analysing wire tensions. This may take some time...")
         for i in range(self.num_wires):
             tension, binszize = self.analyse_tension(i)
             self.wire_tensions.append(tension)
@@ -417,7 +421,9 @@ if __name__ == "__main__":
     # my_data = WtmData("daten_bp1-007/WTD-Vibration-20251016-111956.tdms")
 
     # zweite Hälfte Goldwicklung
-    # my_data = WtmData("daten_bp1-007_b/WTD-Vibration-20251103-131030.tdms")
+    #my_data = WtmData("data/daten_bp1-007_b/WTD-Vibration-20251103-131030.tdms")
+    #my_data.start_analysis()
+    #plot_wire_tensions(my_data)
 
     # Einzelner Draht mit Gewicht
     # my_data = WtmData("test_daten/WTD-Vibration-20251030-154035.tdms")
@@ -432,9 +438,7 @@ if __name__ == "__main__":
     # my_data = WtmData(measurements[2])
 
     # my_data = WtmData("data/2026_01 Drahtspannung Testwicklung/WTD-Vibration-20260211-130549.tdms")
-    my_data = WtmData(
-        "data/2026_01 Drahtspannung Testwicklung/WTD-Vibration-20260211-133449.tdms"
-    )
+    my_data = WtmData("data/2026_01 Drahtspannung Testwicklung/WTD-Vibration-20260211-133449.tdms")
     my_data.start_analysis()
     plot_pitches_histogram(my_data, "pitches_new.png")
     plot_wire_positions(my_data, "positions_new.png")
