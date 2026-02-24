@@ -18,24 +18,22 @@ class WtmData:
     def __init__(self, tdms_file_path: str) -> None:
         self.file_path = ""
         self.num_wires: int = 0
-        self.wire_positions: list[float] = (
-            list()
-        )  # Data-precision 1 micrometer, real ca. 10 micrometer
-        self.wire_winlengths: list[float] = (
-            list()
-        )  # Duration of vibration measurement in s
+        # Data-precision 1 micrometer, real ca. 10 micrometer:
+        self.wire_positions: list[float] = list()
+        # Duration of vibration measurement in s:
+        self.wire_winlengths: list[float] = list()
         self.wire_pitches: list[float] = list()
 
         self._read_tdms_metadata(tdms_file_path)
         self._calc_wire_pitches()
 
-        self.wire_frequencies: list[float | None] = [None] * self.num_wires
-        self.wire_tensions: list[float | None] = [None] * self.num_wires
+        self.wire_tensions: list[float] = list()
+        self.tensions_binsizes: list[float] = list()
+        self.tensions_stats = None
 
         if self.wire_pitches:
-            self.wp_statistics = describe(
-                self.wire_pitches
-            )  # achtung erster draht wird ignoriert mit [1:]
+            self.wp_statistics = describe(self.wire_pitches)
+            # achtung erster draht wird ignoriert mit [1:]
             print(
                 f"Wire pitch: mean={self.wp_statistics.mean:.3f} mm, variance={self.wp_statistics.variance:.3f} mm"
             )
@@ -61,7 +59,7 @@ class WtmData:
                 )
 
     def _calc_wire_pitches(self):
-        """Calculates wire pitches in mm
+        """Calculate wire pitches in mm
 
         Returns:
             list[float]: Element 0 is the pitch between wire 0 and 1,
@@ -73,6 +71,14 @@ class WtmData:
             self.wire_pitches.append(pitch)
 
     def get_spectrum(self, wire_no: int) -> np.ndarray:
+        """Read sensor data for the given wire from the file
+
+        Args:
+            wire_no (int): Wire index
+
+        Returns:
+            np.ndarray: Raw data 1D array with sampled sensor values
+        """
         group_name = f"Wire_{wire_no}"
         spectrum = None
         with TdmsFile.open(self.file_path) as tdms_file:
@@ -81,6 +87,16 @@ class WtmData:
         return spectrum
 
     def get_power_spectrum(self, wire_no: int) -> np.ndarray:
+        """Read fft result for the given wire from the file
+
+        Fourier transform is also done in Labview and stored here.
+
+        Args:
+            wire_no (int): Wire index
+
+        Returns:
+            np.ndarray: 1D Array with result of fourier transform
+        """
         group_name = f"Wire_{wire_no}"
         spectrum = None
         with TdmsFile.open(self.file_path) as tdms_file:
@@ -88,133 +104,128 @@ class WtmData:
         spectrum = spectrum[np.isfinite(spectrum)]  # get rid of nan entries
         return spectrum
 
+    """ ----------- Analysis Functions ----------- """
 
-""" ----------- Analysis Functions ----------- """
+    def filter_spectrum(self, spectrum: np.ndarray):
+        # compute running mean over N samples:
+        N = 30
+        rm_spect = np.convolve(spectrum, np.ones(N) / N, mode="valid")
+        return rm_spect
 
+    def do_fft(self, spectrum: np.ndarray):
+        """Perform fast fourier transform on given data
 
-def filter_spectrum(spectrum: np.ndarray):
-    # compute running mean over N samples:
-    N = 30
-    rm_spect = np.convolve(spectrum, np.ones(N) / N, mode="valid")
-    return rm_spect
+        Args:
+            spectrum (np.ndarray): Sensor data
 
+        Returns:
+            tuple(ndarray,ndarray): Frequqenzy and Amplitude values of fft result
+        """
+        sample_spacing = 1.0 / self.sampling_rate  # seconds
+        fft_ampl = fftshift(fft(spectrum, norm="forward"))
+        fft_freq = fftshift(fftfreq(spectrum.size, sample_spacing))
+        nentries = spectrum.size // 2
+        fft_freq = fft_freq[nentries:]  # use only positive half of freq spectrum
+        fft_ampl = np.absolute(fft_ampl)[nentries:]
+        fft_ampl = fft_ampl / fft_ampl[0]  # normalization
+        if DEBUG:
+            freq_incr = fft_freq[1] - fft_freq[0]
+            print(" -| do_fft()")
+            print(f"  | frequency increment = {freq_incr:.3f} Hz")
+            print(f"  | entries in frequency spectrum: {nentries}")
 
-def do_fft(data: WtmData, wire_no: int):
-    spectrum = data.get_spectrum(wire_no)
-    sample_spacing = 1.0 / data.sampling_rate  # seconds
-    fft_ampl = fftshift(fft(spectrum, norm="forward"))
-    fft_freq = fftshift(fftfreq(spectrum.size, sample_spacing))
-    nentries = spectrum.size // 2
-    fft_freq = fft_freq[nentries:]  # use only positive half of freq spectrum
-    fft_ampl = np.absolute(fft_ampl)[nentries:]
-    fft_ampl = fft_ampl / fft_ampl[0]  # normalization
-    if DEBUG:
-        freq_incr = fft_freq[1] - fft_freq[0]
-        print(" -| do_fft()")
-        print(f"  | frequency increment = {freq_incr:.3f} Hz")
-        print(
-            f"  | tension increment = {calculate_wire_tension(100.0) - calculate_wire_tension(100.0 - freq_incr)} "
+        return fft_freq, fft_ampl
+
+    def find_frequency(self, x_vals: np.ndarray, y_vals: np.ndarray):
+        """Find peaks in the fft output
+
+        Args:
+            x_vals (np.ndarray): frequency output of fft
+            y_vals (np.ndarray): amplitude output of fft
+
+        Returns:
+            float: frequency of the first found peak
+
+        If no peaks are found, it may be necessary to adjust `search_interval`
+        and the parameters of `find_peaks`
+        """
+        search_interval = [40.0, 250.0]  # Min and max frequency in Hz
+        search_indices = [
+            int(i // (x_vals[1] - x_vals[0])) for i in search_interval
+        ]  # indices of interval values
+        search_array = y_vals[search_indices[0] : search_indices[1]]
+        peaks_idx, _ = find_peaks(search_array, prominence=0.002, wlen=20, distance=50)
+        peaks_x = x_vals[peaks_idx + search_indices[0]]
+
+        if DEBUG:
+            print(f" -| find_frequency( x_vals[{x_vals.size}], y_vals[{y_vals.size}])")
+            peaks_y = y_vals[peaks_idx + search_indices[0]]
+            print(f"  | peaks x {peaks_x}")
+            print(f"  | peaks y {peaks_y}")
+
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.plot(x_vals, y_vals, ".-", linewidth=0.6)
+            ax.plot(peaks_x, peaks_y, "x")
+            ax.grid(True)
+            ax.set_yscale("log")
+            ax.set_xlim(-1.0, 501.0)
+            ax.set_title("Find Frequency")
+            ax.set_xlabel("Frequency /Hz")
+            ax.set_ylabel("Amplitude")
+
+        # first peak is the frequency we want
+        return float(peaks_x[0]) if peaks_x.size else 0.0
+
+    def calculate_wire_tension(self, frequency: float, harmonic: int = 1):
+        wire_rho = 19289.58  # kg / m^3
+        wire_radius = 10 * 10**-6  # m
+        # wire_rho = 19020.0  # kg / m^3
+        # wire_radius = (20.11 / 2 ) * 10**-6  # m
+        wire_length = 1.4  # m
+        tension = (
+            4
+            * (frequency**2)
+            * (wire_length**2)
+            * wire_rho
+            * np.pi
+            * (wire_radius**2)
+            / (harmonic**2)
         )
-        print(f"  | entries in frequency spectrum: {nentries}")
+        return tension  # Newton
 
-    return fft_freq, fft_ampl
+    def analyse_tension(self, wire_no: int):
+        """Analyse data of one wire
 
+        Args:
+            wire_no (int): Wire index
 
-def find_frequency(x_vals: np.ndarray, y_vals: np.ndarray):
-    """Find peaks in the fft output
-
-    Args:
-        x_vals (np.ndarray): frequency output of fft
-        y_vals (np.ndarray): amplitude output of fft
-
-    Returns:
-        float: frequency of the first found peak
-
-    I no peaks are found, it may be necessary to adjust `search_interval`
-    and the parameters of `find_peaks`
-    """
-    search_interval = [40.0, 250.0]  # Min and max frequency in Hz
-    search_indices = [
-        int(i // (x_vals[1] - x_vals[0])) for i in search_interval
-    ]  # indices of interval values
-    search_array = y_vals[search_indices[0] : search_indices[1]]
-    peaks_idx, _ = find_peaks(search_array, prominence=0.002, wlen=20, distance=50)
-    peaks_x = x_vals[peaks_idx + search_indices[0]]
-
-    if DEBUG:
-        print(f" -| find_frequency( x_vals[{x_vals.size}], y_vals[{y_vals.size}])")
-        peaks_y = y_vals[peaks_idx + search_indices[0]]
-        print(f"  | peaks x {peaks_x}")
-        print(f"  | peaks y {peaks_y}")
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(x_vals, y_vals, ".-", linewidth=0.6)
-        ax.plot(peaks_x, peaks_y, "x")
-        ax.grid(True)
-        ax.set_yscale("log")
-        ax.set_xlim(-1.0, 501.0)
-        ax.set_title("Find Frequency")
-        ax.set_xlabel("Frequency /Hz")
-        ax.set_ylabel("Amplitude")
-
-    # first peak is the frequency we want
-    return float(peaks_x[0]) if peaks_x.size else 0.0
-
-
-def calculate_wire_tension(frequency: float, harmonic: int = 1):
-    wire_rho = 19289.58  # kg / m^3
-    wire_radius = 10 * 10**-6  # m
-    # wire_rho = 19020.0  # kg / m^3
-    # wire_radius = (20.11 / 2 ) * 10**-6  # m
-    wire_length = 1.4  # m
-    tension = (
-        4
-        * (frequency**2)
-        * (wire_length**2)
-        * wire_rho
-        * np.pi
-        * (wire_radius**2)
-        / (harmonic**2)
-    )
-    return tension  # Newton
-
-
-def analyse_tension(data: WtmData):
-    """Main analysis function.
-
-    Loop over all wires in the input data and do all steps to calculate the tension of each wire
-
-    Args:
-        data (WtmData): Data input
-
-    Returns:
-        list[float],list[float]: Tension values, frequency values
-    """
-    print("Analysing wire tensions. This may take some time")
-    wire_tensions: list[float] = list()
-    wire_frequencies = list()
-    for i in range(data.num_wires):
-        x, y = do_fft(data, i)
-        freq = find_frequency(x, y)
+        Returns:
+            tuple[float,float]: Tension of the wire in newton, binszize in newton
+        """
+        spectrum = self.get_spectrum(wire_no)
+        x, y = self.do_fft(spectrum)
+        freq = self.find_frequency(x, y)
         if freq == 0.0:
-            print(f"Could not find frequency for wire No {i}")
-        tension = calculate_wire_tension(freq)
-        data.wire_tensions[i] = tension
-        data.wire_frequencies[i] = freq
-        wire_tensions.append(tension)
-        wire_frequencies.append(freq)
-        # if tension == 0.0:
-        #    print(i)
+            print(f"Could not find frequency for wire No {wire_no}")
+        tension = self.calculate_wire_tension(freq)
+        freq_binsize = 1.0 / self.wire_winlengths[wire_no]
+        tension_binsize = self.calculate_wire_tension(freq + freq_binsize) - tension
+        return tension, tension_binsize
 
-    stats = describe(wire_tensions)
-    print("Wire Tension Analysis finished:")
-    print(f" mean = {stats.mean:.4f} N, variance = {stats.variance:.5f} N")
+    def start_analysis(self):
+        """Main analysis loop"""
+        self.wire_tensions.clear()
+        self.tensions_binsizes.clear()
+        for i in range(self.num_wires):
+            tension, binszize = self.analyse_tension(i)
+            self.wire_tensions.append(tension)
+            self.tensions_binsizes.append(binszize)
 
-    # for i in range(len(wire_tensions)):
-    #    if wire_tensions[i] < (0.25) :
-    #        print(f"Wire {i}: tension {wire_tensions[i]}")
-
-    return wire_tensions, wire_frequencies
+        self.tensions_stats = describe(self.wire_tensions)
+        print("Wire Tension Analysis finished:")
+        print(
+            f" mean = {self.tensions_stats.mean:.4f} N, variance = {self.tensions_stats.variance:.5f} N"
+        )
 
 
 """ ----------- Plotting Functions ----------- """
@@ -284,18 +295,17 @@ def plot_wire_positions(data: WtmData, fig_filename=None):
     # plt.show()
 
 
-def plot_wire_tensions(
-    wire_tensions: list[float], wire_frequencies: list[float], fig_filename=None
-):
-    stats = describe(wire_tensions)
+def plot_wire_tensions(data: WtmData, fig_filename=None):
+    if not (data.tensions_stats and data.wire_tensions and data.wire_winlengths):
+        print(
+            "Error. No wire tensions calculated (yet) in the given instance of WtmData."
+        )
+        return
+    yerrors = [x / 2 for x in data.tensions_binsizes]
     fig, ax = plt.subplots(figsize=(10, 6))
-    yerrors = [
-        (calculate_wire_tension(x + 1.0) - calculate_wire_tension(x)) / 2.0
-        for x in wire_frequencies
-    ]
     ax.errorbar(
-        range(len(wire_tensions)),
-        wire_tensions,
+        range(len(data.wire_tensions)),
+        data.wire_tensions,
         yerr=yerrors,
         fmt="o",
         linewidth=0.6,
@@ -308,7 +318,7 @@ def plot_wire_tensions(
     ax.text(
         0.35,
         0.25,
-        f"total {len(wire_tensions)} wires\n mean = {stats.mean:.4f} N\nvariance = {stats.variance:.5f} N",
+        f"total {len(data.wire_tensions)} wires\n mean = {data.tensions_stats.mean:.4f} N\nvariance = {data.tensions_stats.variance:.5f} N",
         horizontalalignment="right",
         verticalalignment="top",
         transform=ax.transAxes,
@@ -347,10 +357,11 @@ def plot_power_spectrum(data: WtmData, wire_no: int):
 def analyse_single_wire(data: WtmData, wire_no: int):
     global DEBUG
     DEBUG = True
+    spect = data.get_spectrum(wire_no)
     # spect = filter_spectrum(spect)
-    x, y = do_fft(data, wire_no)
-    freq = find_frequency(x, y)
-    tension = calculate_wire_tension(freq)
+    x, y = data.do_fft(spect)
+    freq = data.find_frequency(x, y)
+    tension = data.calculate_wire_tension(freq)
     print(f" -| analyse_single_wire(wire_no={wire_no})")
     print(f"  | tension = {tension * 100:.2f} cN")
     DEBUG = False
@@ -424,10 +435,10 @@ if __name__ == "__main__":
     my_data = WtmData(
         "data/2026_01 Drahtspannung Testwicklung/WTD-Vibration-20260211-133449.tdms"
     )
+    my_data.start_analysis()
     plot_pitches_histogram(my_data, "pitches_new.png")
     plot_wire_positions(my_data, "positions_new.png")
-    tensions, frequencies = analyse_tension(my_data)
-    plot_wire_tensions(tensions, frequencies, "tensions_new.png")
+    plot_wire_tensions(my_data, "tensions_new.png")
 
     # print(
     #    f"Wire tension calculated: 9.81 kg*m/s^2 * 0.0509 kg = {9.81 * 0.0509 * 100:.2f} cN"
