@@ -4,6 +4,7 @@ import numpy as np
 from nptdms import TdmsFile
 import matplotlib.pyplot as plt
 import matplotlib.ticker
+from matplotlib.patches import Rectangle
 from scipy.stats import describe
 from scipy.fft import fft, fftshift, fftfreq
 from scipy.signal import find_peaks
@@ -66,11 +67,13 @@ class WtmData:
 
         Returns:
             list[float]: Element 0 is the pitch between wire 0 and 1,
-                Element 1 is the pitch between wire 1 and 2 and so on...
+                element 1 is the pitch between wire 1 and 2 and so on...
         """
         self.wire_pitches.clear()
         for i in range(self.num_wires - 1):
             pitch = (self.wire_positions[i + 1] - self.wire_positions[i]) * 1000.0
+            if pitch < 0.2 :
+                print(f"* Wires {i} and {i+1} possible double Measurement! *")
             self.wire_pitches.append(pitch)
 
     def get_spectrum(self, wire_no: int) -> np.ndarray:
@@ -269,27 +272,11 @@ def plot_pitches_histogram(data: WtmData, fig_filename=None):
 
 
 def plot_wire_positions(data: WtmData, fig_filename=None):
-    fig, (ax_1, ax_2) = plt.subplots(
-        2,
-        1,
-        sharex=True,
-        figsize=(10, 6),
-        gridspec_kw={
-            "height_ratios": [1, 2],
-            "hspace": 0.05,
-            "left": 0.07,
-            "right": 0.95,
-            "top": 0.95,
-            "bottom": 0.09,
-        },
-    )
-    ax_1.plot(range(data.num_wires), data.wire_positions, ".-", linewidth=0.6)
-    ax_1.set_title("Wire Pitch")
-    ax_1.grid(True)
-    ax_1.set_ylabel("Wire pos. /m")
-
+    fig,  ax_2 = plt.subplots(figsize=(10, 6))
     pitches_x = np.linspace(0.5, data.num_wires - 1.5, data.num_wires - 1)
+    ax_2.add_patch(Rectangle((0.0, 2.45),float(data.num_wires + 1), 0.1, facecolor="0.8", alpha=0.5))
     ax_2.plot(pitches_x, data.wire_pitches, ".-", linewidth=0.6)
+    ax_2.set_title("Wire Pitch")
     ax_2.grid(True)
     ax_2.set_ylabel("Wire pitch /mm")
     ax_2.set_xlabel("Wire number")
@@ -307,27 +294,39 @@ def plot_wire_tensions(data: WtmData, fig_filename=None):
         return
     yerrors = [x / 2 for x in data.tensions_binsizes]
     fig, ax = plt.subplots(figsize=(10, 6))
+    #ax.errorbar(
+    #    range(len(data.wire_tensions)),
+    #    data.wire_tensions,
+    #    yerr=yerrors,
+    #    fmt="o",
+    #    linewidth=0.6,
+    #    capsize=5.0,
+    #)
+    ax.axline((0, 0.45), slope=0, linewidth=0.6, alpha=0.8, color="green", label="set tension")
+    ax.axline((0, data.tensions_stats.mean), slope=0, linewidth=0.6, alpha=0.8, color="orange", label="mean tension")
     ax.errorbar(
-        range(len(data.wire_tensions)),
+        data.wire_positions,
         data.wire_tensions,
         yerr=yerrors,
         fmt="o",
         linewidth=0.6,
         capsize=5.0,
+        label="data"
     )
     ax.grid(True)
     ax.set_title("Wire Tension Measurement")
     ax.set_ylabel("Wire tension /N")
-    ax.set_xlabel("Wire number")
+    ax.set_xlabel("Wire position /m")
     ax.text(
         0.35,
-        0.25,
+        0.20,
         f"total {len(data.wire_tensions)} wires\n mean = {data.tensions_stats.mean:.4f} N\nvariance = {data.tensions_stats.variance:.5f} N",
         horizontalalignment="right",
         verticalalignment="top",
         transform=ax.transAxes,
         bbox={"facecolor": "white", "alpha": 0.8, "pad": 5},
     )
+    ax.legend()
 
     if fig_filename:
         fig.savefig(fig_filename, bbox_inches="tight")
@@ -438,11 +437,14 @@ if __name__ == "__main__":
     # my_data = WtmData(measurements[2])
 
     # my_data = WtmData("data/2026_01 Drahtspannung Testwicklung/WTD-Vibration-20260211-130549.tdms")
-    my_data = WtmData("data/2026_01 Drahtspannung Testwicklung/WTD-Vibration-20260211-133449.tdms")
+    my_data = WtmData("data/2026_04_01_Testwicklung/WTD-Vibration-20260401-104651.tdms")
     my_data.start_analysis()
-    plot_pitches_histogram(my_data, "pitches_new.png")
-    plot_wire_positions(my_data, "positions_new.png")
-    plot_wire_tensions(my_data, "tensions_new.png")
+    plot_pitches_histogram(my_data, "data/2026_04_01_Testwicklung/pitches.png")
+    plot_wire_positions(my_data, "data/2026_04_01_Testwicklung/positions.png")
+    plot_wire_tensions(my_data, "data/2026_04_01_Testwicklung/tensions.png")
+    #plot_pitches_histogram(my_data)
+    #plot_wire_positions(my_data)
+    #plot_wire_tensions(my_data)
 
     # print(
     #    f"Wire tension calculated: 9.81 kg*m/s^2 * 0.0509 kg = {9.81 * 0.0509 * 100:.2f} cN"
