@@ -9,16 +9,36 @@ from scipy.stats import describe
 from scipy.fft import fft, fftshift, fftfreq
 from scipy.signal import find_peaks
 # from scipy.signal import butter, lfilter
+from windingmachine.archive import get_tension
 
 
 DEBUG = False
 
 
 class WtmData:
-    sampling_rate = 100.0e3  # 100 kHz
+    """Class that represents the measurement results of a wire vibration measurement."""
 
-    def __init__(self, tdms_file_path: str) -> None:
+    sampling_rate = 100.0e3  # 100 kHz
+    available_wire_types = ("Anode", "Cathode")
+
+    def __init__(
+        self, tdms_file_path: str, wiretype: str = "Anode", wirelength: float = 1.4
+    ) -> None:
+        """Create a new instance of WtmData
+
+        Args:
+            tdms_file_path (str): path to tdms vibration file
+            wiretype (str, optional): Cathode or Anode. Defaults to "Anode".
+            wirelength (float, optional): Length of the wires in m. Defaults to 1.4.
+        """
         self.file_path = ""
+
+        if wiretype not in self.available_wire_types:
+            print(f"Error. Wire type must be one of:  {self.available_wire_types}")
+            sys.exit()
+        self.wire_type: str = wiretype
+        self.wire_length = wirelength
+
         self.num_wires: int = 0
         # Data-precision 1 micrometer, real ca. 10 micrometer:
         self.wire_positions: list[float] = list()
@@ -35,7 +55,7 @@ class WtmData:
 
         if self.wire_pitches:
             self.wp_statistics = describe(self.wire_pitches)
-            # achtung erster draht wird ignoriert mit [1:]
+            # erster draht wird ignoriert mit [1:]
             print(
                 f"Wire pitch: mean={self.wp_statistics.mean:.3f} mm, variance={self.wp_statistics.variance:.3f} mm"
             )
@@ -72,8 +92,8 @@ class WtmData:
         self.wire_pitches.clear()
         for i in range(self.num_wires - 1):
             pitch = (self.wire_positions[i + 1] - self.wire_positions[i]) * 1000.0
-            if pitch < 0.2 :
-                print(f"* Wires {i} and {i+1} possible double Measurement! *")
+            if pitch < 0.2:
+                print(f"* Wires {i} and {i + 1} possible double Measurement! *")
             self.wire_pitches.append(pitch)
 
     def get_spectrum(self, wire_no: int) -> np.ndarray:
@@ -110,12 +130,20 @@ class WtmData:
         spectrum = spectrum[np.isfinite(spectrum)]  # get rid of nan entries
         return spectrum
 
+    def read_archive_tensions(self, archive_file: str, frame_no: int = 0):
+        archive_tensions = get_tension(archive_file, frame_no)
+        archive_tensions = [ float(i) / 100.0 for i in archive_tensions]
+
+        if len(archive_tensions) == len(self.wire_tensions):
+            self.archive_tensions = archive_tensions
+            print("Successsfully read archive file")
+
     """ ----------- Analysis Functions ----------- """
 
     def filter_spectrum(self, spectrum: np.ndarray):
         # compute running mean over N samples:
         N = 30
-        rm_spect = np.convolve(spectrum, np.ones(N) / N, mode="valid")
+        rm_spect = np.convolve(spectrum, np.ones(N) / N, mode="same")
         return rm_spect
 
     def do_fft(self, spectrum: np.ndarray):
@@ -175,19 +203,26 @@ class WtmData:
             ax.grid(True)
             ax.set_yscale("log")
             ax.set_xlim(-1.0, 501.0)
-            ax.set_title("Find Frequency")
+            ax.set_title("Fast Fourier Transform of Signal")
             ax.set_xlabel("Frequency /Hz")
             ax.set_ylabel("Amplitude")
+            fig.tight_layout()
 
         # first peak is the frequency we want
         return float(peaks_x[0]) if peaks_x.size else 0.0
 
     def calculate_wire_tension(self, frequency: float, harmonic: int = 1):
-        wire_rho = 19289.58  # kg / m^3
-        wire_radius = 10 * 10**-6  # m
-        # wire_rho = 19020.0  # kg / m^3
-        # wire_radius = (20.11 / 2 ) * 10**-6  # m
-        wire_length = 1.4  # m
+        if self.wire_type == "Anode":
+            wire_rho = 19289.58  # kg / m^3
+            wire_radius = 10.055 * 10**-6  # m
+        elif self.wire_type == "Cathode":
+            wire_rho = 19289.58  # kg / m^3
+            wire_radius = 10 * 10**-6  # m
+        else:
+            wire_rho = 0.0  # kg / m^3
+            wire_radius = 0.0  # m
+
+        wire_length = self.wire_length  # m
         tension = (
             4
             * (frequency**2)
@@ -272,9 +307,13 @@ def plot_pitches_histogram(data: WtmData, fig_filename=None):
 
 
 def plot_wire_positions(data: WtmData, fig_filename=None):
-    fig,  ax_2 = plt.subplots(figsize=(10, 6))
+    fig, ax_2 = plt.subplots(figsize=(10, 6))
     pitches_x = np.linspace(0.5, data.num_wires - 1.5, data.num_wires - 1)
-    ax_2.add_patch(Rectangle((0.0, 2.45),float(data.num_wires + 1), 0.1, facecolor="0.8", alpha=0.5))
+    ax_2.add_patch(
+        Rectangle(
+            (0.0, 2.45), float(data.num_wires + 1), 0.1, facecolor="0.8", alpha=0.5
+        )
+    )
     ax_2.plot(pitches_x, data.wire_pitches, ".-", linewidth=0.6)
     ax_2.set_title("Wire Pitch")
     ax_2.grid(True)
@@ -294,16 +333,25 @@ def plot_wire_tensions(data: WtmData, fig_filename=None):
         return
     yerrors = [x / 2 for x in data.tensions_binsizes]
     fig, ax = plt.subplots(figsize=(10, 6))
-    #ax.errorbar(
+    # ax.errorbar(
     #    range(len(data.wire_tensions)),
     #    data.wire_tensions,
     #    yerr=yerrors,
     #    fmt="o",
     #    linewidth=0.6,
     #    capsize=5.0,
-    #)
-    ax.axline((0, 0.45), slope=0, linewidth=0.6, alpha=0.8, color="green", label="set tension")
-    ax.axline((0, data.tensions_stats.mean), slope=0, linewidth=0.6, alpha=0.8, color="orange", label="mean tension")
+    # )
+    ax.axline(
+        (0, 0.47), slope=0, linewidth=0.6, alpha=0.8, color="green", label="Set tension"
+    )
+    ax.axline(
+        (0, data.tensions_stats.mean),
+        slope=0,
+        linewidth=0.6,
+        alpha=0.8,
+        color="orange",
+        label="Mean tension",
+    )
     ax.errorbar(
         data.wire_positions,
         data.wire_tensions,
@@ -311,15 +359,19 @@ def plot_wire_tensions(data: WtmData, fig_filename=None):
         fmt="o",
         linewidth=0.6,
         capsize=5.0,
-        label="data"
+        label="Data",
+        zorder=1
     )
+    if hasattr(data,"archive_tensions") :
+        ax.plot(data.wire_positions, data.archive_tensions, ".", label="Archive", zorder=2)
+
     ax.grid(True)
     ax.set_title("Wire Tension Measurement")
     ax.set_ylabel("Wire tension /N")
     ax.set_xlabel("Wire position /m")
     ax.text(
-        0.35,
-        0.20,
+        0.21,
+        0.15,
         f"total {len(data.wire_tensions)} wires\n mean = {data.tensions_stats.mean:.4f} N\nvariance = {data.tensions_stats.variance:.5f} N",
         horizontalalignment="right",
         verticalalignment="top",
@@ -395,6 +447,7 @@ def analyse_signal(data: WtmData, wire_no: int):
     ax.set_title("Sensor Signal")
     ax.set_xlabel("Time /s")
     ax.set_ylabel("Signal /V")
+    fig.tight_layout()
     # ax.set_xlim(0.15)
 
     # print(f"y mean value = {np.mean(spectrum)}")
@@ -420,9 +473,9 @@ if __name__ == "__main__":
     # my_data = WtmData("daten_bp1-007/WTD-Vibration-20251016-111956.tdms")
 
     # zweite Hälfte Goldwicklung
-    #my_data = WtmData("data/daten_bp1-007_b/WTD-Vibration-20251103-131030.tdms")
-    #my_data.start_analysis()
-    #plot_wire_tensions(my_data)
+    # my_data = WtmData("data/daten_bp1-007_b/WTD-Vibration-20251103-131030.tdms")
+    # my_data.start_analysis()
+    # plot_wire_tensions(my_data)
 
     # Einzelner Draht mit Gewicht
     # my_data = WtmData("test_daten/WTD-Vibration-20251030-154035.tdms")
@@ -437,14 +490,20 @@ if __name__ == "__main__":
     # my_data = WtmData(measurements[2])
 
     # my_data = WtmData("data/2026_01 Drahtspannung Testwicklung/WTD-Vibration-20260211-130549.tdms")
-    my_data = WtmData("data/2026_04_01_Testwicklung/WTD-Vibration-20260401-104651.tdms")
+    directory = "data/2026_05_26-Test/"
+    file = "WTD-Vibration-20260526-144544.tdms"
+    my_data = WtmData(directory + file)
     my_data.start_analysis()
-    plot_pitches_histogram(my_data, "data/2026_04_01_Testwicklung/pitches.png")
-    plot_wire_positions(my_data, "data/2026_04_01_Testwicklung/positions.png")
-    plot_wire_tensions(my_data, "data/2026_04_01_Testwicklung/tensions.png")
-    #plot_pitches_histogram(my_data)
-    #plot_wire_positions(my_data)
-    #plot_wire_tensions(my_data)
+    my_data.read_archive_tensions(directory+"26052114.32M")
+    plot_pitches_histogram(my_data, directory+"pitches.png")
+    plot_wire_positions(my_data, directory+"positions.png")
+    plot_wire_tensions(my_data, directory+"tensions.png")
+    #analyse_single_wire(my_data, 140)
+    #analyse_signal(my_data, 140)
+    # plot_pitches_histogram(my_data)
+    # plot_wire_positions(my_data)
+    # plot_wire_tensions(my_data)
+
 
     # print(
     #    f"Wire tension calculated: 9.81 kg*m/s^2 * 0.0509 kg = {9.81 * 0.0509 * 100:.2f} cN"
