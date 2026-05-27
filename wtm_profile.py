@@ -23,12 +23,25 @@ class WtmProfile:
 
 if __name__ == "__main__":
     #data = WtmProfile("daten_bp1-007/WTD-Profile-20251013-145459.tdms")
-    data = WtmProfile("data/2026_01 Drahtspannung Testwicklung/WTD-Profile-20260211-133326.tdms")
+    data = WtmProfile("data/2026_04_29-BP1-006/Anode/WTD-Profile-20260429-134253.tdms")
     #print(data.x_profile_led)
     fig, ax = plt.subplots(figsize=(10, 6))
-    #ax.plot(data.x_profile_led, ".")
-    ax.plot(data.x_profile_locations, data.x_profile_amplitudes, "o")
+    ax.plot(data.x_profile_locations, data.x_profile_amplitudes, "o-", linewidth=0.5)
     #ax.plot(data.x_profile_amplitudes)
     #ax.plot(data.x_profile_gaps, ".")
+    ax.set_xlabel("Position /m")
+    ax.set_ylabel("Sensor Signal Amplitude /V")
+    ax.set_title("Wire Positions from Profile")
     ax.grid(True)
+
+
+
+    fig2, ax2 = plt.subplots(figsize=(10, 6))
+    ax2.plot(data.x_profile_led, ".-", linewidth=0.4)
+    ax2.set_ylabel("Sensor Signal /V")
+    ax2.grid(True)
+    ax2.set_title("Raw Sensor Signal from Profile")
+
+    fig.tight_layout()
+    fig2.tight_layout()
     plt.show()
