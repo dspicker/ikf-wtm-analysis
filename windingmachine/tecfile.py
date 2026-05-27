@@ -1,5 +1,6 @@
 import os.path
 import re
+import json
 
 
 class TecFile:
@@ -8,14 +9,14 @@ class TecFile:
         self.w0_values[0] = 1.0
         self.w1_values = [1.0] * 3601
         self.params = {
-            "wire_speed": 0.075,
-            "angle_move": 20.0,
-            "wire_pitch": 2.5,
-            "winding_start": 300.0,
-            "winding_end": 1300.0,
-            "wire_tension": 470.0,
-            "wire_diameter": 0.02,
-            "angle_init": 10.0,
+            "wire_speed": 0.075,  # m/s
+            "angle_move": 20.0,  # deg
+            "wire_pitch": 2.5,  # mm
+            "winding_start": 300.0,  # mm
+            "winding_end": 1300.0,  # mm
+            "wire_tension": 470.0,  # mN
+            "wire_diameter": 0.02,  # mm
+            "angle_init": 10.0,  # deg
         }
         self.mode = ""  # "existing" or "new"
 
@@ -111,12 +112,23 @@ class TecFile:
         self.params["wire_diameter"] = new_w1_values[3677]
         self.params["angle_init"] = new_w1_values[3678]
 
+    def save_params(self, filename: str):
+        with open(filename, mode="w", encoding="utf-8") as file:
+            json.dump(self.params, file, indent=2)
+
+    def load_params(self, filename: str):
+        with open(filename, mode="r", encoding="utf-8") as file:
+            new_params = json.load(file)
+            self.params = new_params
+
 
 if __name__ == "__main__":
     myfile = TecFile()
     # test = myfile.compose_line(0, 3400, 3.5)
     # print(f" >{test}< ")
     # myfile.write_file("test.tec")
-    #myfile.read_file("test.tec")
+    # myfile.read_file("test.tec")
 
-    #myfile._check_file("ab3456789.cdef")
+    # myfile._check_file("ab3456789.cdef")
+    #myfile.save_params("test.json")
+    #myfile.load_params("test.json")
