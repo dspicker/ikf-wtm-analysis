@@ -49,7 +49,7 @@ class TecFile:
 
     def write_file(self, filepath: str):
         filepath = self._check_file(filepath)
-        with open(filepath, mode="w", encoding="utf-8", newline="\r\n") as file:
+        with open(filepath, mode="w", encoding="cp850", newline="\r\n") as file:
             for idx, val in enumerate(self.w0_values):
                 out_str = self.compose_line(0, idx, val)
                 file.write(out_str + "\n")
@@ -85,7 +85,7 @@ class TecFile:
     def read_file(self, filepath: str):
         new_w0_values: list[float] = list()
         new_w1_values: list[float] = list()
-        with open(filepath, "r", encoding="utf-8") as file:
+        with open(filepath, "r", encoding="cp850") as file:
             for line in file:
                 columns = line.split(";", 1)
                 value = float(columns[0].strip())
@@ -179,6 +179,7 @@ class TecFile:
     def create_plot(self):
         rpm_x = [float(i) for i in np.arange(0.0, 360.1, 0.1)]
         rpm_y = self.w1_values[0:3601]
+        rpm_smooth = self.make_smooth(rpm_y, 100)
 
         bx, by = zip(*self.get_basepoints().items())
         sx, sy = self.interpolate_basepoints()
@@ -186,8 +187,8 @@ class TecFile:
         fig, ax = plt.subplots()
         ax.plot(bx, by, "o", label="Stützpunkte")
         ax.plot(rpm_x, rpm_y, ".", markersize=2.0, label="Geschwindigkeitsprofil")
-        # ax.plot(rpm_profile_smooth, ".", markersize=0.9,)
-        ax.plot(sx, sy, ".", markersize=1.0, label="Interpoliert")
+        ax.plot(rpm_x, rpm_smooth, ".", markersize=0.9, label="geglättet")
+        #ax.plot(sx, sy, ".", markersize=1.0, label="Interpoliert")
         ax.set_xlabel("degree")
         ax.xaxis.set_major_locator(MultipleLocator(45))
         ax.set_ylim(0.0)
@@ -203,15 +204,15 @@ if __name__ == "__main__":
     myfile = TecFile()
 
     # myfile.write_file("test.tec")
-    # myfile.read_file("test.tec")
+    myfile.read_file("/Users/dspicker/Uni/wickelmaschine/technolo/AU-NEU.TEC")
 
     # myfile.save_params()
     # myfile.save_basepoints()
 
-    myfile.load_params()
-    myfile.load_basepoints()
-    sx, sy = myfile.interpolate_basepoints()
-    myfile.set_rpm_profile(sy)
+    #myfile.load_params()
+    #myfile.load_basepoints()
+    #sx, sy = myfile.interpolate_basepoints()
+    #myfile.set_rpm_profile(sy)
     # myfile.set_rpm_profile(myfile.make_smooth(myfile.w1_values, 200))
     # myfile.write_file("AU-NEU2.TEC")
 
