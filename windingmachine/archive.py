@@ -21,6 +21,15 @@ def read_archive(file: str):
 
 
 def get_tension(file: str, frame: int=0):
+    """Read wire tensions from archive file that is produced by the winding machine
+
+    Args:
+        file (str): Path to archive file
+        frame (int, optional): 0 upper frame, 1 lower frame. Defaults to 0.
+
+    Returns:
+        list[float]: Tensions of the wire as archived by the winding machine
+    """
 
     archive_data = read_archive(file)
 
