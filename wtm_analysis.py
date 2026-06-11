@@ -1,6 +1,7 @@
 import sys
 import os.path
 import numpy as np
+import pandas as pd
 from nptdms import TdmsFile
 import matplotlib.pyplot as plt
 import matplotlib.ticker
@@ -8,8 +9,8 @@ from matplotlib.patches import Rectangle
 from scipy.stats import describe
 from scipy.fft import fft, fftshift, fftfreq
 from scipy.signal import find_peaks
-# from scipy.signal import butter, lfilter
 from windingmachine.archive import get_tension
+
 
 
 DEBUG = False
@@ -20,6 +21,10 @@ class WtmData:
 
     sampling_rate = 100.0e3  # 100 kHz
     available_wire_types = ("Anode", "Cathode")
+
+    # Pitch threshold in mm
+    # Below this value we assume that one wire got measured twice by the machine
+    pitch_threshold = 0.2
 
     def __init__(
         self, tdms_file_path: str, wiretype: str = "Anode", wirelength: float = 1.4
@@ -45,6 +50,8 @@ class WtmData:
         # Duration of vibration measurement in s:
         self.wire_winlengths: list[float] = list()
         self.wire_pitches: list[float] = list()
+        self.double_measured: list[int] = list()
+        self.wp_statistics = None
 
         self._read_tdms_metadata(tdms_file_path)
         self._calc_wire_pitches()
@@ -52,13 +59,6 @@ class WtmData:
         self.wire_tensions: list[float] = list()
         self.tensions_binsizes: list[float] = list()
         self.tensions_stats = None
-
-        if self.wire_pitches:
-            self.wp_statistics = describe(self.wire_pitches)
-            # erster draht wird ignoriert mit [1:]
-            print(
-                f"Wire pitch: mean={self.wp_statistics.mean:.3f} mm, variance={self.wp_statistics.variance:.3f} mm"
-            )
 
     def _read_tdms_metadata(self, tdms_file_path: str):
         """Check if file is there and read necessary metadata
@@ -92,9 +92,48 @@ class WtmData:
         self.wire_pitches.clear()
         for i in range(self.num_wires - 1):
             pitch = (self.wire_positions[i + 1] - self.wire_positions[i]) * 1000.0
-            if pitch < 0.2:
+            if pitch < self.pitch_threshold:
                 print(f"* Wires {i} and {i + 1} possible double Measurement! *")
+                print(
+                    f"  at {self.wire_positions[i] * 1000.0:.4f} mm and {self.wire_positions[i + 1] * 1000.0:.4f}"
+                )
             self.wire_pitches.append(pitch)
+
+        self.wp_statistics = describe(self.wire_pitches)
+        print(
+            f"Wire pitch: mean={self.wp_statistics.mean:.3f} mm, variance={self.wp_statistics.variance:.3f} mm"
+        )
+
+    def to_dataframe(self, filter: bool = False):
+        """Return analysis result as pandas dataframe
+
+        Args:
+            filter (bool, optional): If double measurements should be removed from the result. Defaults to False.
+
+        Returns:
+            pandas.DataFrame: Tension analysis results
+        """
+        if not (self.tensions_stats and self.wire_tensions and self.wire_winlengths):
+            print(
+                "Error. No wire tensions calculated (yet) in the given instance of WtmData."
+            )
+            return pd.DataFrame()
+        pitches = self.wire_pitches
+        pitches.append(self.wire_pitches[-1])
+        dataframe = pd.DataFrame(
+            {
+                "wire_position": self.wire_positions,
+                "wire_pitch": pitches,
+                "wire_tension": self.wire_tensions,
+                "tension_binsize": self.tensions_binsizes,
+            }
+        )
+        if filter:
+            # Filter out the double measured wires
+            dataframe = dataframe[
+                dataframe["wire_pitch"] >= self.pitch_threshold
+            ].reset_index(drop=True)
+        return dataframe
 
     def get_spectrum(self, wire_no: int) -> np.ndarray:
         """Read sensor data for the given wire from the file
@@ -131,8 +170,16 @@ class WtmData:
         return spectrum
 
     def read_archive_tensions(self, archive_file: str, frame_no: int = 0):
+        """Read archive file produced by the winding machine
+
+        Args:
+            archive_file (str): Path to the archive file that was created when winding.
+            frame_no (int): Select if the upper or lower frame got measured. 0=upper
+
+        Write results to self.archive_tensions on success.
+        """
         archive_tensions = get_tension(archive_file, frame_no)
-        archive_tensions = [ float(i) / 100.0 for i in archive_tensions]
+        archive_tensions = [float(i) / 100.0 for i in archive_tensions]
 
         if len(archive_tensions) == len(self.wire_tensions):
             self.archive_tensions = archive_tensions
@@ -216,8 +263,8 @@ class WtmData:
             wire_rho = 19289.58  # kg / m^3
             wire_radius = 10.055 * 10**-6  # m
         elif self.wire_type == "Cathode":
-            wire_rho = 19289.58  # kg / m^3
-            wire_radius = 10 * 10**-6  # m
+            wire_rho = 8230.22  # kg / m^3
+            wire_radius = 37.5 * 10**-6  # m
         else:
             wire_rho = 0.0  # kg / m^3
             wire_radius = 0.0  # m
@@ -287,15 +334,16 @@ def plot_pitches_histogram(data: WtmData, fig_filename=None):
     ax.grid(axis="y", which="major", linestyle="-", alpha=0.4)
     ax.set_xlabel("Wire pitch /mm")
     ax.set_ylabel("Count")
-    ax.text(
-        0.95,
-        0.95,
-        f"total {data.num_wires} wires\nmean {data.wp_statistics.mean:.3f} mm\nvariance {data.wp_statistics.variance:.3f} mm",
-        horizontalalignment="right",
-        verticalalignment="top",
-        transform=ax.transAxes,
-        bbox={"facecolor": "white", "alpha": 0.8, "pad": 5},
-    )
+    if data.wp_statistics:
+        ax.text(
+            0.95,
+            0.95,
+            f"total {data.num_wires} wires\nmean {data.wp_statistics.mean:.3f} mm\nvariance {data.wp_statistics.variance:.3f} mm",
+            horizontalalignment="right",
+            verticalalignment="top",
+            transform=ax.transAxes,
+            bbox={"facecolor": "white", "alpha": 0.8, "pad": 5},
+        )
     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(4 * bin_width))
     ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(bin_width))
     ax.yaxis.set_minor_locator(matplotlib.ticker.AutoMinorLocator())
@@ -360,10 +408,12 @@ def plot_wire_tensions(data: WtmData, fig_filename=None):
         linewidth=0.6,
         capsize=5.0,
         label="Data",
-        zorder=1
+        zorder=1,
     )
-    if hasattr(data,"archive_tensions") :
-        ax.plot(data.wire_positions, data.archive_tensions, ".", label="Archive", zorder=2)
+    if hasattr(data, "archive_tensions"):
+        ax.plot(
+            data.wire_positions, data.archive_tensions, ".", label="Archive", zorder=2
+        )
 
     ax.grid(True)
     ax.set_title("Wire Tension Measurement")
@@ -489,21 +539,21 @@ if __name__ == "__main__":
     #
     # my_data = WtmData(measurements[2])
 
-    # my_data = WtmData("data/2026_01 Drahtspannung Testwicklung/WTD-Vibration-20260211-130549.tdms")
-    directory = "data/2026_05_26-Test/"
-    file = "WTD-Vibration-20260526-144544.tdms"
+    directory = "data/2026_06_01-Test/"
+    file = "WTD-Vibration-20260602-140015.tdms"
     my_data = WtmData(directory + file)
     my_data.start_analysis()
-    my_data.read_archive_tensions(directory+"26052114.32M")
-    plot_pitches_histogram(my_data, directory+"pitches.png")
-    plot_wire_positions(my_data, directory+"positions.png")
-    plot_wire_tensions(my_data, directory+"tensions.png")
-    #analyse_single_wire(my_data, 140)
-    #analyse_signal(my_data, 140)
+    # my_data.read_archive_tensions(directory+"26052712.55M",1)
+    # plot_pitches_histogram(my_data, directory+"pitches.png")
+    # plot_wire_positions(my_data, directory+"positions.png")
+    plot_wire_tensions(my_data, directory + "tensions.png")
+    my_data.to_dataframe()
+
+    # analyse_single_wire(my_data, 140)
+    # analyse_signal(my_data, 140)
     # plot_pitches_histogram(my_data)
     # plot_wire_positions(my_data)
     # plot_wire_tensions(my_data)
-
 
     # print(
     #    f"Wire tension calculated: 9.81 kg*m/s^2 * 0.0509 kg = {9.81 * 0.0509 * 100:.2f} cN"
