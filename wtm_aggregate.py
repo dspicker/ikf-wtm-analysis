@@ -2,6 +2,7 @@ from wtm_analysis import WtmData
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
+import pandas as pd
 
 
 if __name__ == "__main__":
@@ -12,16 +13,28 @@ if __name__ == "__main__":
         "data/2026_06_01-Test/WTD-Vibration-20260602-142113.tdms",
     ]
 
+    directory = "/Volumes/ikfhep/CBM/Drahtspannungsmessung/Messdaten/2026_06_17-BP1-006/"
+    csv_filepaths = [directory+"20260617-102341.csv",
+                     directory+"20260617-140755.csv",
+                     directory+"20260617-180850.csv"
+                     ]
+
     # Collect data
     n_wires = set()
     dataframes = list()
-    for file in tdms_filepaths:
-        wtm_data = WtmData(file)
-        wtm_data.start_analysis()
-        wtm_df = wtm_data.to_dataframe(True)
+    #for file in tdms_filepaths:
+    #    wtm_data = WtmData(file)
+    #    wtm_data.start_analysis()
+    #    wtm_df = wtm_data.to_dataframe(True)
+    #    n_wires.add(len(wtm_df.index))
+    #    dataframes.append(wtm_df)
+    #    print(" ")
+
+    for file in csv_filepaths:
+        wtm_df = pd.read_csv(file, index_col="index")
         n_wires.add(len(wtm_df.index))
         dataframes.append(wtm_df)
-        print(" ")
+
 
     # All datasets have to be of the same size
     if len(n_wires) != 1:
@@ -55,10 +68,10 @@ if __name__ == "__main__":
             tensions[idx] = float(t_mean)
             binsizes[idx] = float(b_mean)
 
-    # For this specific set of measurements, remove one wire
-    n_wires -= 1
-    del tensions[38]
-    del binsizes[38]
+    ## For this specific set of measurements, remove one wire
+    #n_wires -= 1
+    #del tensions[38]
+    #del binsizes[38]
 
     # Plotting
     tensions_stats = stats.describe(tensions)
@@ -67,7 +80,7 @@ if __name__ == "__main__":
 
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.axline(
-        (0, 0.47), slope=0, linewidth=0.6, alpha=0.8, color="green", label="Set tension"
+        (0, 0.50), slope=0, linewidth=0.6, alpha=0.8, color="green", label="Set tension"
     )
     ax.axline(
         (0, tensions_stats.mean),
@@ -94,12 +107,22 @@ if __name__ == "__main__":
     ax.text(
         0.21,
         0.15,
-        f"total {n_wires} wires\n mean = {tensions_stats.mean:.5f} N\nvariance = {tensions_stats.variance:.5f} N",
+        f"total {n_wires} wires\n mean = {tensions_stats.mean:.5f} N\n std = {np.sqrt(tensions_stats.variance):.5f} N",
         horizontalalignment="right",
         verticalalignment="top",
         transform=ax.transAxes,
         bbox={"facecolor": "white", "alpha": 0.8, "pad": 5},
     )
     ax.legend()
+    fig.tight_layout()
+
+    binsize = np.mean(binsizes)
+    bins = np.arange(tensions_stats.minmax[0]-binsize, tensions_stats.minmax[1]+binsize, binsize*2.).tolist()
+    fig2, ax2 = plt.subplots(figsize=(10, 6))
+    ax2.hist(tensions, bins=bins)
+    #ax2.grid(True)
+    ax2.set_ylabel("Count")
+    ax2.set_xlabel("Wire tension /N")
+
 
     plt.show()
