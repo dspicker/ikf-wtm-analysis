@@ -9,8 +9,9 @@ from matplotlib.patches import Rectangle
 from scipy.stats import describe
 from scipy.fft import fft, fftshift, fftfreq
 from scipy.signal import find_peaks
+from scipy.optimize import curve_fit
 from windingmachine.archive import get_tension
-
+from tqdm import tqdm
 
 
 DEBUG = False
@@ -128,12 +129,18 @@ class WtmData:
                 "tension_binsize": self.tensions_binsizes,
             }
         )
+        if hasattr(self, "archive_tensions"):
+            dataframe["archive_tension"] = self.archive_tensions
         if filter:
             # Filter out the double measured wires
             dataframe = dataframe[
                 dataframe["wire_pitch"] >= self.pitch_threshold
             ].reset_index(drop=True)
         return dataframe
+
+    def to_csv_file(self, filename: str):
+        df = self.to_dataframe(True)
+        df.to_csv(filename, index_label="index")
 
     def get_spectrum(self, wire_no: int) -> np.ndarray:
         """Read sensor data for the given wire from the file
@@ -184,6 +191,10 @@ class WtmData:
         if len(archive_tensions) == len(self.wire_tensions):
             self.archive_tensions = archive_tensions
             print("Successsfully read archive file")
+        else:
+            print(
+                " read_archive_tensions() : Error. Datasets have different number of entries."
+            )
 
     """ ----------- Analysis Functions ----------- """
 
@@ -218,29 +229,31 @@ class WtmData:
         return fft_freq, fft_ampl
 
     def find_frequency(self, x_vals: np.ndarray, y_vals: np.ndarray):
-        """Find peaks in the fft output
+        """Find peak in the fft output and try to fit it
 
         Args:
             x_vals (np.ndarray): frequency output of fft
             y_vals (np.ndarray): amplitude output of fft
 
         Returns:
-            float: frequency of the first found peak
+            tuple(float,float, int): frequency, std, harmonic
 
-        If no peaks are found, it may be necessary to adjust `search_interval`
-        and the parameters of `find_peaks`
+        Returns (0.0, 0.0, 0) if no peaks are found. Then it may be necessary
+        to adjust `search_interval` and the parameters of `find_peaks`
         """
-        search_interval = [40.0, 250.0]  # Min and max frequency in Hz
+        search_interval = [40.0, 350.0]  # Min and max frequency in Hz
         search_indices = [
             int(i // (x_vals[1] - x_vals[0])) for i in search_interval
         ]  # indices of interval values
         search_array = y_vals[search_indices[0] : search_indices[1]]
         peaks_idx, _ = find_peaks(search_array, prominence=0.002, wlen=20, distance=50)
         peaks_x = x_vals[peaks_idx + search_indices[0]]
+        peaks_y = y_vals[peaks_idx + search_indices[0]]
 
+        fig = None
+        ax = None
         if DEBUG:
             print(f" -| find_frequency( x_vals[{x_vals.size}], y_vals[{y_vals.size}])")
-            peaks_y = y_vals[peaks_idx + search_indices[0]]
             print(f"  | peaks x {peaks_x}")
             print(f"  | peaks y {peaks_y}")
 
@@ -255,10 +268,57 @@ class WtmData:
             ax.set_ylabel("Amplitude")
             fig.tight_layout()
 
-        # first peak is the frequency we want
-        return float(peaks_x[0]) if peaks_x.size else 0.0
+        frequency: float = 0.0
+        freq_std: float = 0.0
+        harmonic: int = 0
+        if peaks_x.size >= 2:
+            harmonic = 2
+        elif peaks_x.size == 1:
+            harmonic = 1
 
-    def calculate_wire_tension(self, frequency: float, harmonic: int = 1):
+        # Try to fit the second harmonic, if that fails try the first harmonic.
+        # If that also fails, return just the peak position of the first peak.
+        # If no peaks where found at all, return zero
+        while harmonic > 0:
+            p_x = float(peaks_x[harmonic - 1])
+            p_y = float(peaks_y[harmonic - 1])
+            initial_params = np.array([p_y, p_x, 10])
+            try:
+                params, pcov = curve_fit(
+                    self._gauss_func, x_vals, y_vals, initial_params
+                )
+            except RuntimeError:  # Fit failed
+                harmonic -= 1  # try next harmonic
+                tqdm.write(" Fit in FFT failed. ")
+                if harmonic == 0:  # if this was already the last try, return peak pos
+                    frequency = float(peaks_x[0])
+                    harmonic = 1
+                    break
+            else:  # Fit succeeded
+                perr = np.sqrt(np.diag(pcov))
+                frequency = float(params[1])
+                freq_std = float(params[2])
+
+                if DEBUG and ax:
+                    fit_x = x_vals[
+                        int(params[1] - 5 * params[2]) : int(params[1] + 5 * params[2])
+                    ]
+                    fit_y = self._gauss_func(fit_x, *params)
+                    ax.plot(fit_x, fit_y)
+                    print(f"  | FFT-Fit succeeded for harmonic {harmonic} ")
+                    print(
+                        f"  | mu    = {float(params[1]):.3f} +- {float(perr[1]):.5f} Hz"
+                    )
+                    print(
+                        f"  | sigma = {float(params[2]):.4f} +- {float(perr[2]):.6f} Hz"
+                    )
+                break
+
+        return (frequency, freq_std, harmonic)
+
+    def calculate_wire_tension(
+        self, frequency: float, harmonic: int = 2, freq_std: float = 0.0
+    ):
         if self.wire_type == "Anode":
             wire_rho = 19289.58  # kg / m^3
             wire_radius = 10.055 * 10**-6  # m
@@ -279,7 +339,20 @@ class WtmData:
             * (wire_radius**2)
             / (harmonic**2)
         )
-        return tension  # Newton
+
+        error = 0.0
+        if freq_std > 0.0:
+            error = abs(
+                8
+                * frequency
+                * (wire_length**2)
+                * wire_rho
+                * np.pi
+                * (wire_radius**2)
+                * freq_std
+                / (harmonic**2)
+            )
+        return (tension, error)  # Newton
 
     def analyse_tension(self, wire_no: int):
         """Analyse data of one wire
@@ -292,29 +365,36 @@ class WtmData:
         """
         spectrum = self.get_spectrum(wire_no)
         x, y = self.do_fft(spectrum)
-        freq = self.find_frequency(x, y)
+        freq, std, harmonic = self.find_frequency(x, y)
         if freq == 0.0:
             print(f"Could not find frequency for wire No {wire_no}")
-        tension = self.calculate_wire_tension(freq)
-        freq_binsize = 1.0 / self.wire_winlengths[wire_no]
-        tension_binsize = self.calculate_wire_tension(freq + freq_binsize) - tension
-        return tension, tension_binsize
+            return (0.0, 0.0)
+        tension, errorbar = self.calculate_wire_tension(freq, harmonic, std)
+        if std == 0.0:  # use distance of values in fft
+            freq_binsize = 1.0 / self.wire_winlengths[wire_no]
+            tension_binsize, _ = self.calculate_wire_tension(freq + freq_binsize)
+            errorbar = tension_binsize - tension
+        return (tension, errorbar)
 
     def start_analysis(self):
         """Main analysis loop"""
         self.wire_tensions.clear()
         self.tensions_binsizes.clear()
         print("Analysing wire tensions. This may take some time...")
-        for i in range(self.num_wires):
+        for i in tqdm(range(self.num_wires)):
             tension, binszize = self.analyse_tension(i)
             self.wire_tensions.append(tension)
             self.tensions_binsizes.append(binszize)
 
+        print("")
         self.tensions_stats = describe(self.wire_tensions)
         print("Wire Tension Analysis finished:")
         print(
-            f" mean = {self.tensions_stats.mean:.4f} N, variance = {self.tensions_stats.variance:.5f} N"
+            f" mean = {self.tensions_stats.mean:.4f} N, std = {np.sqrt(self.tensions_stats.variance):.5f} N"
         )
+
+    def _gauss_func(self, x, a, mu, sigma):
+        return a * np.exp(-((x - mu) ** 2) / (2 * sigma**2))
 
 
 """ ----------- Plotting Functions ----------- """
@@ -390,7 +470,7 @@ def plot_wire_tensions(data: WtmData, fig_filename=None):
     #    capsize=5.0,
     # )
     ax.axline(
-        (0, 0.47), slope=0, linewidth=0.6, alpha=0.8, color="green", label="Set tension"
+        (0, 0.50), slope=0, linewidth=0.6, alpha=0.8, color="green", label="Set tension"
     )
     ax.axline(
         (0, data.tensions_stats.mean),
@@ -422,7 +502,7 @@ def plot_wire_tensions(data: WtmData, fig_filename=None):
     ax.text(
         0.21,
         0.15,
-        f"total {len(data.wire_tensions)} wires\n mean = {data.tensions_stats.mean:.4f} N\nvariance = {data.tensions_stats.variance:.5f} N",
+        f"total {len(data.wire_tensions)} wires\n mean = {data.tensions_stats.mean:.4f} N\nstd = {np.sqrt(data.tensions_stats.variance):.4f} N",
         horizontalalignment="right",
         verticalalignment="top",
         transform=ax.transAxes,
@@ -465,8 +545,8 @@ def analyse_single_wire(data: WtmData, wire_no: int):
     spect = data.get_spectrum(wire_no)
     # spect = filter_spectrum(spect)
     x, y = data.do_fft(spect)
-    freq = data.find_frequency(x, y)
-    tension = data.calculate_wire_tension(freq)
+    freq, std, harmonic = data.find_frequency(x, y)
+    tension = data.calculate_wire_tension(freq, harmonic)
     print(f" -| analyse_single_wire(wire_no={wire_no})")
     print(f"  | tension = {tension * 100:.2f} cN")
     DEBUG = False
@@ -539,18 +619,22 @@ if __name__ == "__main__":
     #
     # my_data = WtmData(measurements[2])
 
-    directory = "data/2026_06_01-Test/"
-    file = "WTD-Vibration-20260602-140015.tdms"
-    my_data = WtmData(directory + file)
+    directory = "data/2026_04_29-BP1-006/Anode/"
+    # directory = (
+    #    "/Volumes/ikfhep/CBM/Drahtspannungsmessung/Messdaten/2026_06_17-BP1-006/"
+    # )
+    file = "WTD-Vibration-20260429-140250.tdms"
+    my_data = WtmData(directory + file, wiretype="Anode")
     my_data.start_analysis()
-    # my_data.read_archive_tensions(directory+"26052712.55M",1)
-    # plot_pitches_histogram(my_data, directory+"pitches.png")
-    # plot_wire_positions(my_data, directory+"positions.png")
-    plot_wire_tensions(my_data, directory + "tensions.png")
-    my_data.to_dataframe()
+    # my_data.read_archive_tensions(directory + "26061513.13M", 0)
+    # plot_pitches_histogram(my_data)
+    # plot_wire_positions(my_data)
+    plot_wire_tensions(my_data)
+    # my_data.to_csv_file(directory+"20260617-180850.csv")
+    # my_data.to_dataframe()
+    # analyse_single_wire(my_data, 52)
 
-    # analyse_single_wire(my_data, 140)
-    # analyse_signal(my_data, 140)
+    # analyse_signal(my_data, 52)
     # plot_pitches_histogram(my_data)
     # plot_wire_positions(my_data)
     # plot_wire_tensions(my_data)

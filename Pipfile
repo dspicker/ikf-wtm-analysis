@@ -9,6 +9,7 @@ matplotlib = "*"
 scipy = "*"
 numpy = "*"
 pandas = "*"
+tqdm = "*"
 
 [dev-packages]
 
