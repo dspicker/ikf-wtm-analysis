@@ -2,23 +2,14 @@ import sys
 import os.path
 import numpy as np
 import pandas as pd
-from nptdms import TdmsFile
 import matplotlib.pyplot as plt
 import matplotlib.ticker
 from matplotlib.patches import Rectangle
-from scipy.stats import describe
-from scipy.fft import fft, fftshift, fftfreq
-from scipy.signal import find_peaks
-from scipy.optimize import curve_fit
-from windingmachine.archive import get_tension
-from tqdm import tqdm
-import re
-import datetime as dt
+
 
 from wtm_data import WtmData
 
 DEBUG = False
-
 
 
 """ ----------- Plotting Functions ----------- """
@@ -166,14 +157,16 @@ def plot_power_spectrum(data: WtmData, wire_no: int):
 def analyse_single_wire(data: WtmData, wire_no: int):
     global DEBUG
     DEBUG = True
+    data.debug = True
     spect = data.get_spectrum(wire_no)
     # spect = filter_spectrum(spect)
     x, y = data.do_fft(spect)
     freq, std, harmonic = data.find_frequency(x, y)
-    tension = data.calculate_wire_tension(freq, harmonic)
+    tension, t_err = data.calculate_wire_tension(freq, harmonic)
     print(f" -| analyse_single_wire(wire_no={wire_no})")
     print(f"  | tension = {tension * 100:.2f} cN")
     DEBUG = False
+    data.debug = False
 
 
 def analyse_signal(data: WtmData, wire_no: int):
@@ -243,22 +236,23 @@ if __name__ == "__main__":
     #
     # my_data = WtmData(measurements[2])
 
-    directory = "data/2026_04_29-BP1-006/Anode/"
+    directory = "data/2026_09_15-BP1-006/"
     # directory = (
     #    "/Volumes/ikfhep/CBM/Drahtspannungsmessung/Messdaten/2026_06_17-BP1-006/"
     # )
-    file = "WTD-Vibration-20260429-140250.tdms"
-    my_data = WtmData(directory + file, wiretype="Anode")
-    # my_data.start_analysis()
+    file = "WTD-Vibration-20260916-125715.tdms"
+    my_data = WtmData(directory + file, wiretype="Anode", wirelength=0.960)
+    my_data.start_analysis()
     # my_data.read_archive_tensions(directory + "26061513.13M", 0)
     # plot_pitches_histogram(my_data)
     # plot_wire_positions(my_data)
     # plot_wire_tensions(my_data)
     # my_data.to_csv_file(directory+"20260617-180850.csv")
     # my_data.to_dataframe()
-    # analyse_single_wire(my_data, 52)
+    #analyse_single_wire(my_data, 0)
+    # my_data.export_metadata_json("test.json")
 
-    # analyse_signal(my_data, 52)
+    #analyse_signal(my_data, 0)
     # plot_pitches_histogram(my_data)
     # plot_wire_positions(my_data)
     # plot_wire_tensions(my_data)
