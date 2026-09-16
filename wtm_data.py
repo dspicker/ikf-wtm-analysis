@@ -4,8 +4,6 @@ import numpy as np
 import pandas as pd
 from nptdms import TdmsFile
 import matplotlib.pyplot as plt
-import matplotlib.ticker
-from matplotlib.patches import Rectangle
 from scipy.stats import describe
 from scipy.fft import fft, fftshift, fftfreq
 from scipy.signal import find_peaks
@@ -14,9 +12,7 @@ from windingmachine.archive import get_tension
 from tqdm import tqdm
 import re
 import datetime as dt
-
-
-DEBUG = False
+import json
 
 
 class WtmData:
@@ -28,7 +24,6 @@ class WtmData:
     # Pitch threshold in mm
     # Below this value we assume that one wire got measured twice by the machine
     pitch_threshold = 0.2
-    
 
     def __init__(
         self, tdms_file_path: str, wiretype: str = "Anode", wirelength: float = 1.4
@@ -41,6 +36,7 @@ class WtmData:
             wirelength (float, optional): Length of the wires in m. Defaults to 1.4.
         """
         self.file_path = ""
+        self.debug = False
 
         if wiretype not in self.available_wire_types:
             print(f"Error. Wire type must be one of:  {self.available_wire_types}")
@@ -117,6 +113,15 @@ class WtmData:
             f"Wire pitch: mean={self.wp_statistics.mean:.3f} mm, variance={self.wp_statistics.variance:.3f} mm"
         )
 
+    def analysis_completed(self):
+        if self.tensions_stats and self.wire_tensions and self.wire_winlengths:
+            return True
+        else:
+            print("No wire tensions calculated (yet) in the given instance of WtmData.")
+            return False
+
+    """ ----------- Output Functions ----------- """
+
     def to_dataframe(self, filter: bool = False):
         """Return analysis result as pandas dataframe
 
@@ -126,10 +131,7 @@ class WtmData:
         Returns:
             pandas.DataFrame: Tension analysis results
         """
-        if not (self.tensions_stats and self.wire_tensions and self.wire_winlengths):
-            print(
-                "Error. No wire tensions calculated (yet) in the given instance of WtmData."
-            )
+        if not self.analysis_completed():
             return pd.DataFrame()
         pitches = self.wire_pitches
         pitches.append(self.wire_pitches[-1])
@@ -153,6 +155,40 @@ class WtmData:
     def to_csv_file(self, filename: str):
         df = self.to_dataframe(True)
         df.to_csv(filename, index_label="index")
+
+    def export_metadata_json(self, filename: str):
+        if not (self.analysis_completed() or self.wp_statistics or self.tensions_stats):
+            return
+        if self.wp_statistics:
+            pitches_mean = self.wp_statistics.mean
+        else:
+            pitches_mean = 0.0
+        if self.tensions_stats:
+            tensions_mean = self.tensions_stats.mean
+            tensions_std = np.sqrt(self.tensions_stats.variance)
+        else:
+            tensions_mean = 0.0
+            tensions_std = 0.0
+        export_dict = {
+            "wire_type": self.wire_type,
+            "wire_length": self.wire_length,
+            "wire_number": self.num_wires,
+            "tdms_path": self.file_path,
+            "datetime_measurement": dt.datetime.strftime(
+                self.datetime_measured, "%Y-%m-%d %H:%M:%S"
+            ),
+            "datetime_analysis": dt.datetime.strftime(
+                dt.datetime.now(), "%Y-%m-%d %H:%M:%S"
+            ),
+            "wire_measureduration": self.wire_winlengths[0],
+            "pitches_mean": pitches_mean,
+            "tensions_mean": tensions_mean,
+            "tensions_std": tensions_std,
+        }
+        with open(filename, "w") as json_file:
+            json.dump(export_dict, json_file, indent=2)
+
+    """ ----------- Input Functions ----------- """
 
     def get_spectrum(self, wire_no: int) -> np.ndarray:
         """Read sensor data for the given wire from the file
@@ -232,7 +268,7 @@ class WtmData:
         fft_freq = fft_freq[nentries:]  # use only positive half of freq spectrum
         fft_ampl = np.absolute(fft_ampl)[nentries:]
         fft_ampl = fft_ampl / fft_ampl[0]  # normalization
-        if DEBUG:
+        if self.debug:
             freq_incr = fft_freq[1] - fft_freq[0]
             print(" -| do_fft()")
             print(f"  | frequency increment = {freq_incr:.3f} Hz")
@@ -264,7 +300,7 @@ class WtmData:
 
         fig = None
         ax = None
-        if DEBUG:
+        if self.debug:
             print(f" -| find_frequency( x_vals[{x_vals.size}], y_vals[{y_vals.size}])")
             print(f"  | peaks x {peaks_x}")
             print(f"  | peaks y {peaks_y}")
@@ -311,7 +347,7 @@ class WtmData:
                 frequency = float(params[1])
                 freq_std = float(params[2])
 
-                if DEBUG and ax:
+                if self.debug and ax:
                     fit_x = x_vals[
                         int(params[1] - 5 * params[2]) : int(params[1] + 5 * params[2])
                     ]
@@ -379,7 +415,7 @@ class WtmData:
         x, y = self.do_fft(spectrum)
         freq, std, harmonic = self.find_frequency(x, y)
         if freq == 0.0:
-            print(f"Could not find frequency for wire No {wire_no}")
+            tqdm.write(f"Could not find frequency for wire No {wire_no}")
             return (0.0, 0.0)
         tension, errorbar = self.calculate_wire_tension(freq, harmonic, std)
         if std == 0.0:  # use distance of values in fft
@@ -392,7 +428,7 @@ class WtmData:
         """Main analysis loop"""
         self.wire_tensions.clear()
         self.tensions_binsizes.clear()
-        print("Analysing wire tensions. This may take some time...")
+        print("Analysing wire tensions. This may take some time... \n")
         for i in tqdm(range(self.num_wires)):
             tension, binszize = self.analyse_tension(i)
             self.wire_tensions.append(tension)
