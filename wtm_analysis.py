@@ -12,6 +12,8 @@ from scipy.signal import find_peaks
 from scipy.optimize import curve_fit
 from windingmachine.archive import get_tension
 from tqdm import tqdm
+import re
+import datetime as dt
 
 
 DEBUG = False
@@ -74,6 +76,13 @@ class WtmData:
         print(f"Loading tdms file  {tdms_file_path} ")
         self.file_path = tdms_file_path
         with TdmsFile.read_metadata(tdms_file_path) as tdms_file:
+            tdms_name = str(tdms_file.properties["name"])
+            datetime_re = re.search(r"WTD-Vibration-(\d{8}-\d{6})", tdms_name)
+            if datetime_re:
+                self.datetime_measured = dt.datetime.strptime(
+                    datetime_re.group(1), "%Y%m%d-%H%M%S"
+                )
+
             all_groups = tdms_file.groups()  # One group per wire
             self.num_wires = len(all_groups)
             print(f"File contains data for {self.num_wires} wires.")
@@ -82,6 +91,8 @@ class WtmData:
                 self.wire_winlengths.append(
                     group["Power_Spectrum"].properties["Duration_s"]
                 )
+                # wf_start_time = group['AI_Subset'].properties["wf_start_time"]
+        # print(dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     def _calc_wire_pitches(self):
         """Calculate wire pitches in mm
@@ -625,11 +636,11 @@ if __name__ == "__main__":
     # )
     file = "WTD-Vibration-20260429-140250.tdms"
     my_data = WtmData(directory + file, wiretype="Anode")
-    my_data.start_analysis()
+    # my_data.start_analysis()
     # my_data.read_archive_tensions(directory + "26061513.13M", 0)
     # plot_pitches_histogram(my_data)
     # plot_wire_positions(my_data)
-    plot_wire_tensions(my_data)
+    # plot_wire_tensions(my_data)
     # my_data.to_csv_file(directory+"20260617-180850.csv")
     # my_data.to_dataframe()
     # analyse_single_wire(my_data, 52)
