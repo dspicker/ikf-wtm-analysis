@@ -103,10 +103,12 @@ class WtmData:
         for i in range(self.num_wires - 1):
             pitch = (self.wire_positions[i + 1] - self.wire_positions[i]) * 1000.0
             if pitch < self.pitch_threshold:
-                print(f"* Wires {i} and {i + 1} possible double Measurement! *")
+                print(f"- Wires {i} and {i + 1} possible double Measurement! -")
                 print(
-                    f"  at {self.wire_positions[i] * 1000.0:.4f} mm and {self.wire_positions[i + 1] * 1000.0:.4f}"
+                    f"  at {self.wire_positions[i] * 1000.0:.4f} mm and {self.wire_positions[i + 1] * 1000.0:.4f}, pitch = {pitch:.4f} mm"
                 )
+            if pitch > (2.5 + self.pitch_threshold) :
+                print(f"+ Possible missed wire at index {i+1}, pitch = {pitch:.4f} mm +")
             self.wire_pitches.append(pitch)
 
         self.wp_statistics = describe(self.wire_pitches)

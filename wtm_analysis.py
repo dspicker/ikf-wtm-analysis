@@ -28,7 +28,7 @@ def analyse_single_tdms(
     my_data.export_metadata_json(os.path.join(path_dir, file_name + "_info.json"))
 
     ## Plotting
-    my_dataframe = my_data.to_dataframe(True)
+    my_dataframe = my_data.to_dataframe(False)
     plot_wire_tensions(
         my_dataframe,
         set_tension,
@@ -52,7 +52,7 @@ def analyse_single_tdms(
 
 if __name__ == "__main__":
     analyse_single_tdms(
-        "data/2026_09_15-BP1-006/WTD-Vibration-20260916-150246.tdms",
+        "/Volumes/ikfhep/CBM/Drahtspannungsmessung/Messdaten/2026_09_15-BP1-006/WTD-Vibration-20260916-150246.tdms",
         "Anode",
         0.96,
         0.5,
