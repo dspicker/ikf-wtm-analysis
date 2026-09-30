@@ -13,16 +13,20 @@ if __name__ == "__main__":
         "data/2026_06_01-Test/WTD-Vibration-20260602-142113.tdms",
     ]
 
-    directory = "/Volumes/ikfhep/CBM/Drahtspannungsmessung/Messdaten/2026_06_17-BP1-006/"
-    csv_filepaths = [directory+"20260617-102341.csv",
-                     directory+"20260617-140755.csv",
-                     directory+"20260617-180850.csv"
-                     ]
+    directory = (
+        "/Volumes/ikfhep/CBM/Drahtspannungsmessung/Messdaten/2026_06_17-BP1-006/"
+    )
+
+    csv_filepaths = [
+        directory + "20260617-102341.csv",
+        directory + "20260617-140755.csv",
+        directory + "20260617-180850.csv",
+    ]
 
     # Collect data
     n_wires = set()
     dataframes = list()
-    #for file in tdms_filepaths:
+    # for file in tdms_filepaths:
     #    wtm_data = WtmData(file)
     #    wtm_data.start_analysis()
     #    wtm_df = wtm_data.to_dataframe(True)
@@ -35,7 +39,6 @@ if __name__ == "__main__":
         n_wires.add(len(wtm_df.index))
         dataframes.append(wtm_df)
 
-
     # All datasets have to be of the same size
     if len(n_wires) != 1:
         print("Error")
@@ -43,15 +46,18 @@ if __name__ == "__main__":
     n_wires = int(n_wires.pop())
     tensions = [0.0] * n_wires
     binsizes = [0.0] * n_wires
+    positions = [0.0] * n_wires
 
     # Loop over wires
     for idx in range(n_wires):
         tensions_i = list()
         binsizes_i = list()
+        positions_i = list()
         # Loop over datasets
         for df in dataframes:
             tensions_i.append(df.iloc[idx, df.columns.get_loc("wire_tension")])
-            binsizes_i.append(df.iloc[idx, df.columns.get_loc("tension_binsize")] / 2.0 )
+            binsizes_i.append(df.iloc[idx, df.columns.get_loc("tension_binsize")])
+            positions_i.append(df.iloc[idx, df.columns.get_loc("wire_position")])
         if tensions_i and binsizes_i:
             t_mean = np.mean(tensions_i)
             t_std = np.std(tensions_i)
@@ -68,61 +74,18 @@ if __name__ == "__main__":
             tensions[idx] = float(t_mean)
             binsizes[idx] = float(b_mean)
 
-    ## For this specific set of measurements, remove one wire
-    #n_wires -= 1
-    #del tensions[38]
-    #del binsizes[38]
+        if positions_i:
+            p_mean = np.mean(positions_i)
+            positions[idx] = float(p_mean)
 
-    # Plotting
     tensions_stats = stats.describe(tensions)
     diff = tensions_stats.minmax[1] - tensions_stats.minmax[0]
     print(f"min,max = {tensions_stats.minmax}, deviation = {diff:.4f}")
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.axline(
-        (0, 0.50), slope=0, linewidth=0.6, alpha=0.8, color="green", label="Set tension"
+    new_dataframe = pd.DataFrame(
+        {
+            "wire_position": positions,
+            "wire_tension": tensions,
+            "tension_binsize": binsizes,
+        }
     )
-    ax.axline(
-        (0, tensions_stats.mean),
-        slope=0,
-        linewidth=0.6,
-        alpha=0.8,
-        color="orange",
-        label="Mean tension",
-    )
-    ax.errorbar(
-        range(n_wires),
-        tensions,
-        yerr=binsizes,
-        fmt="o",
-        linewidth=0.6,
-        capsize=5.0,
-        label="Data",
-        zorder=1,
-    )
-    ax.grid(True)
-    ax.set_title("Wire Tension Measurement")
-    ax.set_ylabel("Wire tension /N")
-    ax.set_xlabel("Wire index")
-    ax.text(
-        0.21,
-        0.15,
-        f"total {n_wires} wires\n mean = {tensions_stats.mean:.5f} N\n std = {np.sqrt(tensions_stats.variance):.5f} N",
-        horizontalalignment="right",
-        verticalalignment="top",
-        transform=ax.transAxes,
-        bbox={"facecolor": "white", "alpha": 0.8, "pad": 5},
-    )
-    ax.legend()
-    fig.tight_layout()
-
-    binsize = np.mean(binsizes)
-    bins = np.arange(tensions_stats.minmax[0]-binsize, tensions_stats.minmax[1]+binsize, binsize*2.).tolist()
-    fig2, ax2 = plt.subplots(figsize=(10, 6))
-    ax2.hist(tensions, bins=bins)
-    #ax2.grid(True)
-    ax2.set_ylabel("Count")
-    ax2.set_xlabel("Wire tension /N")
-
-
-    plt.show()

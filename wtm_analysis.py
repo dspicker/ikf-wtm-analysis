@@ -12,123 +12,6 @@ from wtm_data import WtmData
 DEBUG = False
 
 
-""" ----------- Plotting Functions ----------- """
-
-
-def plot_pitches_histogram(data: WtmData, fig_filename=None):
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.set_title("Wire Pitch Histogram")
-    bin_width = 0.125
-    bins = [
-        float(x)
-        for x in np.arange(
-            -bin_width / 2, max(data.wire_pitches) + bin_width, bin_width
-        )
-    ]
-    ax.hist(data.wire_pitches, bins=bins)
-    ax.grid(axis="y", which="major", linestyle="-", alpha=0.4)
-    ax.set_xlabel("Wire pitch /mm")
-    ax.set_ylabel("Count")
-    if data.wp_statistics:
-        ax.text(
-            0.95,
-            0.95,
-            f"total {data.num_wires} wires\nmean {data.wp_statistics.mean:.3f} mm\nvariance {data.wp_statistics.variance:.3f} mm",
-            horizontalalignment="right",
-            verticalalignment="top",
-            transform=ax.transAxes,
-            bbox={"facecolor": "white", "alpha": 0.8, "pad": 5},
-        )
-    ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(4 * bin_width))
-    ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(bin_width))
-    ax.yaxis.set_minor_locator(matplotlib.ticker.AutoMinorLocator())
-    ax.set_xlim(-bin_width / 2)
-
-    if fig_filename:
-        fig.savefig(fig_filename, bbox_inches="tight")
-    # plt.show()
-
-
-def plot_wire_positions(data: WtmData, fig_filename=None):
-    fig, ax_2 = plt.subplots(figsize=(10, 6))
-    pitches_x = np.linspace(0.5, data.num_wires - 1.5, data.num_wires - 1)
-    ax_2.add_patch(
-        Rectangle(
-            (0.0, 2.45), float(data.num_wires + 1), 0.1, facecolor="0.8", alpha=0.5
-        )
-    )
-    ax_2.plot(pitches_x, data.wire_pitches, ".-", linewidth=0.6)
-    ax_2.set_title("Wire Pitch")
-    ax_2.grid(True)
-    ax_2.set_ylabel("Wire pitch /mm")
-    ax_2.set_xlabel("Wire number")
-
-    if fig_filename:
-        fig.savefig(fig_filename, bbox_inches="tight")
-    # plt.show()
-
-
-def plot_wire_tensions(data: WtmData, fig_filename=None):
-    if not (data.tensions_stats and data.wire_tensions and data.wire_winlengths):
-        print(
-            "Error. No wire tensions calculated (yet) in the given instance of WtmData."
-        )
-        return
-    yerrors = [x / 2 for x in data.tensions_binsizes]
-    fig, ax = plt.subplots(figsize=(10, 6))
-    # ax.errorbar(
-    #    range(len(data.wire_tensions)),
-    #    data.wire_tensions,
-    #    yerr=yerrors,
-    #    fmt="o",
-    #    linewidth=0.6,
-    #    capsize=5.0,
-    # )
-    ax.axline(
-        (0, 0.50), slope=0, linewidth=0.6, alpha=0.8, color="green", label="Set tension"
-    )
-    ax.axline(
-        (0, data.tensions_stats.mean),
-        slope=0,
-        linewidth=0.6,
-        alpha=0.8,
-        color="orange",
-        label="Mean tension",
-    )
-    ax.errorbar(
-        data.wire_positions,
-        data.wire_tensions,
-        yerr=yerrors,
-        fmt="o",
-        linewidth=0.6,
-        capsize=5.0,
-        label="Data",
-        zorder=1,
-    )
-    if hasattr(data, "archive_tensions"):
-        ax.plot(
-            data.wire_positions, data.archive_tensions, ".", label="Archive", zorder=2
-        )
-
-    ax.grid(True)
-    ax.set_title("Wire Tension Measurement")
-    ax.set_ylabel("Wire tension /N")
-    ax.set_xlabel("Wire position /m")
-    ax.text(
-        0.21,
-        0.15,
-        f"total {len(data.wire_tensions)} wires\n mean = {data.tensions_stats.mean:.4f} N\nstd = {np.sqrt(data.tensions_stats.variance):.4f} N",
-        horizontalalignment="right",
-        verticalalignment="top",
-        transform=ax.transAxes,
-        bbox={"facecolor": "white", "alpha": 0.8, "pad": 5},
-    )
-    ax.legend()
-
-    if fig_filename:
-        fig.savefig(fig_filename, bbox_inches="tight")
-    # plt.show()
-
 
 """ -----------     Misc      ----------- """
 
@@ -240,17 +123,17 @@ if __name__ == "__main__":
     # directory = (
     #    "/Volumes/ikfhep/CBM/Drahtspannungsmessung/Messdaten/2026_06_17-BP1-006/"
     # )
-    file = "WTD-Vibration-20260916-125715.tdms"
+    file = "WTD-Vibration-20260916-150246.tdms"
     my_data = WtmData(directory + file, wiretype="Anode", wirelength=0.960)
     my_data.start_analysis()
     # my_data.read_archive_tensions(directory + "26061513.13M", 0)
-    # plot_pitches_histogram(my_data)
-    # plot_wire_positions(my_data)
-    # plot_wire_tensions(my_data)
-    # my_data.to_csv_file(directory+"20260617-180850.csv")
+    #plot_pitches_histogram(my_data)
+    #plot_wire_positions(my_data)
+    #plot_wire_tensions(my_data)
+    my_data.to_csv_file(directory+"20260916-150246.csv")
     # my_data.to_dataframe()
     #analyse_single_wire(my_data, 0)
-    # my_data.export_metadata_json("test.json")
+    my_data.export_metadata_json(directory+"20260916-150246.json")
 
     #analyse_signal(my_data, 0)
     # plot_pitches_histogram(my_data)
