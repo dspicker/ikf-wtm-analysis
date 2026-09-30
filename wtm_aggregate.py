@@ -1,38 +1,14 @@
-from wtm_analysis import WtmData
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
 import pandas as pd
+from wtm_plot import plot_wire_tensions
 
 
-if __name__ == "__main__":
-    tdms_filepaths = [
-        "data/2026_06_01-Test/WTD-Vibration-20260601-155536.tdms",
-        "data/2026_06_01-Test/WTD-Vibration-20260602-133903.tdms",
-        "data/2026_06_01-Test/WTD-Vibration-20260602-140015.tdms",
-        "data/2026_06_01-Test/WTD-Vibration-20260602-142113.tdms",
-    ]
-
-    directory = (
-        "/Volumes/ikfhep/CBM/Drahtspannungsmessung/Messdaten/2026_06_17-BP1-006/"
-    )
-
-    csv_filepaths = [
-        directory + "20260617-102341.csv",
-        directory + "20260617-140755.csv",
-        directory + "20260617-180850.csv",
-    ]
-
+def merge_mean_csv(csv_filepaths: list[str]):
     # Collect data
     n_wires = set()
     dataframes = list()
-    # for file in tdms_filepaths:
-    #    wtm_data = WtmData(file)
-    #    wtm_data.start_analysis()
-    #    wtm_df = wtm_data.to_dataframe(True)
-    #    n_wires.add(len(wtm_df.index))
-    #    dataframes.append(wtm_df)
-    #    print(" ")
 
     for file in csv_filepaths:
         wtm_df = pd.read_csv(file, index_col="index")
@@ -89,3 +65,45 @@ if __name__ == "__main__":
             "tension_binsize": binsizes,
         }
     )
+    return new_dataframe
+
+
+if __name__ == "__main__":
+    # tdms_filepaths = [
+    #    "data/2026_06_01-Test/WTD-Vibration-20260601-155536.tdms",
+    #    "data/2026_06_01-Test/WTD-Vibration-20260602-133903.tdms",
+    #    "data/2026_06_01-Test/WTD-Vibration-20260602-140015.tdms",
+    #    "data/2026_06_01-Test/WTD-Vibration-20260602-142113.tdms",
+    # ]
+    # for file in tdms_filepaths:
+    #    wtm_data = WtmData(file)
+    #    wtm_data.start_analysis()
+    #    wtm_df = wtm_data.to_dataframe(True)
+    #    n_wires.add(len(wtm_df.index))
+    #    dataframes.append(wtm_df)
+    #    print(" ")
+
+    directory = (
+        "/Volumes/ikfhep/CBM/Drahtspannungsmessung/Messdaten/2026_06_17-BP1-006/"
+    )
+
+    csv_filepaths = [
+        directory + "20260617-102341.csv",
+        directory + "20260617-140755.csv",
+        directory + "20260617-180850.csv",
+    ]
+
+    my_dataframe = merge_mean_csv(csv_filepaths)
+
+    plot_wire_tensions(
+        my_dataframe,
+        0.5,
+        "Anode" + ", " + "BP1-006",
+        directory + "tensions_merged.png",
+    )
+
+    ## Show Plots:
+    try:
+        plt.show()
+    except KeyboardInterrupt:
+        plt.close("all")
