@@ -1,5 +1,6 @@
 import sys
 import os.path
+import copy
 import numpy as np
 import pandas as pd
 from nptdms import TdmsFile
@@ -133,7 +134,7 @@ class WtmData:
         """
         if not self.analysis_completed():
             return pd.DataFrame()
-        pitches = self.wire_pitches
+        pitches = copy.deepcopy(self.wire_pitches) 
         pitches.append(self.wire_pitches[-1])
         dataframe = pd.DataFrame(
             {
@@ -443,3 +444,65 @@ class WtmData:
 
     def _gauss_func(self, x, a, mu, sigma):
         return a * np.exp(-((x - mu) ** 2) / (2 * sigma**2))
+
+
+""" -----------     Misc      ----------- """
+
+
+def analyse_single_wire(data: WtmData, wire_no: int):
+    global DEBUG
+    DEBUG = True
+    data.debug = True
+    spect = data.get_spectrum(wire_no)
+    # spect = filter_spectrum(spect)
+    x, y = data.do_fft(spect)
+    freq, std, harmonic = data.find_frequency(x, y)
+    tension, t_err = data.calculate_wire_tension(freq, harmonic)
+    print(f" -| analyse_single_wire(wire_no={wire_no})")
+    print(f"  | tension = {tension * 100:.2f} cN")
+    DEBUG = False
+    data.debug = False
+
+
+def analyse_signal(data: WtmData, wire_no: int):
+    sample_spacing = 1.0 / data.sampling_rate  # seconds
+    spectrum = data.get_spectrum(wire_no)
+
+    # comupte running mean over N samples:
+    # N = 30
+    # rm_spect = np.convolve(spectrum, np.ones(N) / N, mode="valid")
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    x_vals = [float(x) * sample_spacing for x in range(0, len(spectrum))]
+    # x_rm = [float(x) * sample_spacing for x in range(0, len(rm_spect))]
+    # y_oszi = [oszillator(x, 92.0) for x in x_vals]
+    ax.plot(x_vals, spectrum, "-", linewidth=0.7)
+    # ax.plot(x_rm, rm_spect, "-", linewidth=0.7)
+    # ax.plot(x_vals,y_oszi, "-", linewidth=0.5, alpha=0.9)
+    ax.grid(True)
+    ax.set_title("Sensor Signal")
+    ax.set_xlabel("Time /s")
+    ax.set_ylabel("Signal /V")
+    fig.tight_layout()
+
+
+def plot_power_spectrum(data: WtmData, wire_no: int):
+    spec = data.get_power_spectrum(wire_no)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(range(0, len(spec) * 2, 2), spec, ".-", linewidth=0.6)
+
+    ax.set_xlim(0.0, 400.0)
+    # plt.show()
+
+
+def oszillator(t: float, freq: float):
+    y_offset = 1.55
+
+    r = 5.0
+    amplitude = 0.6
+    omega = 2 * np.pi * freq
+    phi = 300.0 * np.pi / 180.0
+    sinus = amplitude * np.cos(omega * t + phi) * np.exp(-t * r)
+
+    return y_offset + sinus

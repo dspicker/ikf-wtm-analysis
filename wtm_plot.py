@@ -158,7 +158,7 @@ def plot_wire_positions(
      ax.set_title("Wire Pitch, " + title_info)
      ax.grid(True)
      ax.set_ylabel("Wire pitch /mm")
-     ax.set_xlabel("Wire number")
+     ax.set_xlabel("Wire index")
      fig.tight_layout()
 
      if fig_filename:
