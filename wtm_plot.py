@@ -166,11 +166,81 @@ def plot_wire_positions(
 
 
 
-if __name__ == "__main__":
-    wtm_result = load_csv_to_df("data/2026_09_15-BP1-006/20260916-150246.csv")
+def plot_before_after(df_before: pd.DataFrame, df_after: pd.DataFrame):
+    tensions_before = df_before[["wire_tension"]].to_numpy().flatten()
+    positions_before = df_before[["wire_position"]].to_numpy().flatten()
+    positions_before -= positions_before[0]
 
+    tensions_after = df_after[["wire_tension"]].to_numpy().flatten()
+    positions_after = df_after[["wire_position"]].to_numpy().flatten()
+    positions_after -= positions_after[0]
+
+    position_offset = 10 * 0.0025 + 0.0013 # m
+    print(f"Offset = {position_offset} m")
+
+    positions_after += position_offset
+
+    residuals = list()
+    residuals_pos =list()
+
+    for idx, x in enumerate(positions_before):
+        lower = x - 0.0012
+        upper = x + 0.0012
+        #print(f"[{lower:.5f}, {upper:.5f}]  {upper-lower}")
+        i = np.where(np.logical_and(positions_after >= lower,  positions_after <= upper))
+        if np.size(i)>0 :
+            residuals.append(tensions_before[idx]-tensions_after[i[0]])
+            residuals_pos.append(x)
+    #print(len(residuals))
+
+    fig, (ax1,ax2) = plt.subplots(2,1,sharex=True,height_ratios=[3,1],figsize=(10, 6))
+    ax1.plot(positions_before,tensions_before, ".-", linewidth=0.6, label="on frame")
+    ax1.plot(positions_after,tensions_after, ".-", linewidth=0.6, label="in chamber")
+    ax2.plot(residuals_pos,residuals, ".")
+    ax1.grid(True)
+    ax2.grid(True)
+    ax1.set_ylabel("Wire tension /N")
+    ax2.set_xlabel("Wire position /m")
+    ax2.set_ylabel("diff")
+    ax1.set_title("Comparison BP1-006")
+    ax1.legend()
+    fig.tight_layout()
+
+
+
+def filter_df(dataframe: pd.DataFrame):
+    nominal_pitch = 2.5  # mm
+    pitch_interval = 0.15  # mm
+    thresh_double = 0.1  # mm
+    # thresh_skipped = nominal_pitch + pitch_interval
+
+    # Remove double measured wires:
+    dataframe = dataframe[
+        dataframe["wire_pitch"] >= (thresh_double + pitch_interval)
+    ].reset_index(drop=True)
+
+    for index, row in dataframe.iterrows():
+        n_skipped = round( float(row["wire_pitch"]) / nominal_pitch ) - 1
+        if n_skipped > 0:
+            print(f"Skipped Wire! {n_skipped} {index}")
+
+    return dataframe
+
+
+if __name__ == "__main__":
+    wtm_before = load_csv_to_df("data/2026_06_17-BP1-006/20260617-180850.csv")
+    wtm_after = load_csv_to_df("data/2026_09_15-BP1-006/WTD-Vibration-20260916-150246_result.csv")
+    plot_before_after(wtm_before,wtm_after)
+    #filtered = filter_df(wtm_result)
     #plot_wire_tensions(wtm_result, title_info="Anode, BP1-006")
     #plot_pitches_hist(wtm_result)
-    plot_wire_positions(wtm_result)
+    #plot_wire_positions(wtm_result)
 
-    plt.show()
+
+    #df.to_csv(filename, index_label="index")
+
+    ## Show Plots:
+    try:
+        plt.show()
+    except KeyboardInterrupt:
+        plt.close("all")

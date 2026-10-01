@@ -156,7 +156,7 @@ class WtmData:
         return dataframe
 
     def to_csv_file(self, filename: str):
-        df = self.to_dataframe(True)
+        df = self.to_dataframe(False)
         df.to_csv(filename, index_label="index")
 
     def export_metadata_json(self, filename: str):
