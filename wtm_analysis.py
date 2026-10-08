@@ -1,4 +1,5 @@
 import os.path
+import pandas as pd
 from matplotlib import pyplot as plt
 from wtm_data import WtmData
 from wtm_plot import plot_wire_positions, plot_pitches_hist, plot_wire_tensions
@@ -29,6 +30,7 @@ def analyse_single_tdms(
 
     ## Plotting
     my_dataframe = my_data.to_dataframe(False)
+    #my_dataframe = filter_df(my_dataframe)
     plot_wire_tensions(
         my_dataframe,
         set_tension,
@@ -48,11 +50,30 @@ def analyse_single_tdms(
     )
 
 
+def filter_df(dataframe: pd.DataFrame):
+    nominal_pitch = 2.5  # mm
+    pitch_interval = 0.15  # mm
+    thresh_double = 0.1  # mm
+    # thresh_skipped = nominal_pitch + pitch_interval
+
+    # Remove double measured wires:
+    dataframe = dataframe[
+        dataframe["wire_pitch"] >= (thresh_double + pitch_interval)
+    ].reset_index(drop=True)
+
+    for index, row in dataframe.iterrows():
+        n_skipped =  int( float(row["pitch"]) / nominal_pitch )
+        if n_skipped > 0:
+            print(f"Skipped Wire! {n_skipped} {index}")
+
+    return dataframe
+
+
 """ ----------- Main Function ----------- """
 
 if __name__ == "__main__":
     analyse_single_tdms(
-        "/Volumes/ikfhep/CBM/Drahtspannungsmessung/Messdaten/2026_09_15-BP1-006/WTD-Vibration-20260916-150246.tdms",
+        "/Volumes/ikfhep/CBM/Drahtspannungsmessung/Messdaten/2026_09_15-BP1-006/WTD-Vibration-20260915-155820.tdms",
         "Anode",
         0.96,
         0.5,

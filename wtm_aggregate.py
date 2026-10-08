@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
 import pandas as pd
-from wtm_plot import plot_wire_tensions
+from wtm_plot import plot_wire_tensions, filter_add_skipped, filter_remove_double
 
 
 def merge_mean_csv(csv_filepaths: list[str]):
@@ -12,6 +12,8 @@ def merge_mean_csv(csv_filepaths: list[str]):
 
     for file in csv_filepaths:
         wtm_df = pd.read_csv(file, index_col="index")
+        wtm_df = filter_remove_double(wtm_df)
+        #wtm_df = filter_add_skipped(wtm_df)
         n_wires.add(len(wtm_df.index))
         dataframes.append(wtm_df)
 
@@ -35,28 +37,28 @@ def merge_mean_csv(csv_filepaths: list[str]):
             binsizes_i.append(df.iloc[idx, df.columns.get_loc("tension_binsize")])
             positions_i.append(df.iloc[idx, df.columns.get_loc("wire_position")])
         if tensions_i and binsizes_i:
-            t_mean = np.mean(tensions_i)
-            t_std = np.std(tensions_i)
-            b_mean = np.mean(binsizes_i)
+            t_mean = np.nanmean(tensions_i)
+            t_std = np.nanstd(tensions_i)
+            b_mean = np.nanmean(binsizes_i)
 
             if t_std > 0.01:
                 # Remove Outliers
                 z_t = [np.abs((x - t_mean) / t_std) for x in tensions_i]  # z score
                 tensions_i = [x for x, z in zip(tensions_i, z_t) if z < 1.0]
                 binsizes_i = [x for x, z in zip(binsizes_i, z_t) if z < 1.0]
-                t_mean = np.mean(tensions_i)
-                b_mean = np.mean(binsizes_i)
+                t_mean = np.nanmean(tensions_i)
+                b_mean = np.nanmean(binsizes_i)
 
             tensions[idx] = float(t_mean)
             binsizes[idx] = float(b_mean)
 
         if positions_i:
-            p_mean = np.mean(positions_i)
+            p_mean = np.nanmean(positions_i)
             positions[idx] = float(p_mean)
 
     tensions_stats = stats.describe(tensions)
     diff = tensions_stats.minmax[1] - tensions_stats.minmax[0]
-    print(f"min,max = {tensions_stats.minmax}, deviation = {diff:.4f}")
+    print(f"Tension range [{tensions_stats.minmax[0]:.3f}, {tensions_stats.minmax[1]:.3f}] deviation = {diff:.4f}")
 
     new_dataframe = pd.DataFrame(
         {
@@ -84,8 +86,16 @@ if __name__ == "__main__":
     #    print(" ")
 
     directory = (
-        "/Volumes/ikfhep/CBM/Drahtspannungsmessung/Messdaten/2026_06_17-BP1-006/"
+        #"data/2026_09_15-BP1-006/"
+        "data/2026_06_17-BP1-006/"
     )
+
+    #csv_filepaths = [
+    #    directory + "WTD-Vibration-20260915-135113_result.csv",
+    #    directory + "WTD-Vibration-20260915-155820_result.csv",
+    #    directory + "WTD-Vibration-20260916-130434_result.csv",
+    #    directory + "WTD-Vibration-20260916-150246_result.csv",
+    #]
 
     csv_filepaths = [
         directory + "20260617-102341.csv",
@@ -101,6 +111,8 @@ if __name__ == "__main__":
         "Anode" + ", " + "BP1-006",
         directory + "tensions_merged.png",
     )
+
+    my_dataframe.to_csv(directory + "merged_result.csv", index_label="index")
 
     ## Show Plots:
     try:
