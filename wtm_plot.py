@@ -5,12 +5,34 @@ import matplotlib.ticker
 from matplotlib.patches import Rectangle
 from scipy import stats
 import os.path
+from windingmachine.archive import get_tension
 
 
 def load_csv_to_df(filepath: str):
     dataframe = pd.read_csv(filepath, index_col="index")
     return dataframe
 
+def read_archive_tensions(dataframe: pd.DataFrame, archive_file: str, frame_no: int = 0):
+    """Read archive file produced by the winding machine
+
+    Args:
+        archive_file (str): Path to the archive file that was created when winding.
+        frame_no (int): Select if the upper or lower frame got measured. 0=upper
+
+    Write results to dataframe on success.
+    """
+    archive_tensions = get_tension(archive_file, frame_no)
+    archive_tensions = [float(i) / 100.0 for i in archive_tensions]
+
+    if len(archive_tensions) == dataframe.index.size:
+        dataframe["archive_tension"] = archive_tensions
+        print("Successsfully read archive file")
+    else:
+        print(
+            " read_archive_tensions() : Error. Datasets have different number of entries."
+        )
+
+    return dataframe
 
 def plot_wire_tensions(
     data: pd.DataFrame, set_tension=0.5, title_info="", fig_filename: str | None = None
@@ -64,15 +86,15 @@ def plot_wire_tensions(
     ax.set_title("Wire Tension Measurement, " + title_info)
     ax.set_ylabel("Wire tension /N")
     ax.set_xlabel("Wire index")
-    ax.legend()
-    fig.tight_layout()
+    
 
-    binsize = np.mean(binsizes_arr) / 3.0
-    bins = np.arange(
-        tensions_stats.minmax[0] - binsize,
-        tensions_stats.minmax[1] + binsize,
-        binsize * 2.0,
-    ).tolist()
+    #binsize = np.mean(binsizes_arr) / 3.0
+    #bins = np.arange(
+    #    tensions_stats.minmax[0] - binsize,
+    #    tensions_stats.minmax[1] + binsize,
+    #    binsize * 2.0,
+    #).tolist()
+    bins = np.arange(0.41, 0.56, 0.005).tolist()
     fig2, ax2 = plt.subplots(figsize=(10, 6))
     ax2.hist(tensions_arr, bins=bins)
     ax2.axvline(
@@ -93,6 +115,10 @@ def plot_wire_tensions(
     ax2.set_ylabel("Wire Count")
     ax2.set_xlabel("Wire tension /N")
     # ax2.grid(True)
+
+
+    ax.legend()
+    fig.tight_layout()
     ax2.legend()
     fig2.tight_layout()
 
@@ -100,6 +126,43 @@ def plot_wire_tensions(
         root, ext = os.path.splitext(fig_filename)
         fig.savefig(root + "_01" + ext, bbox_inches="tight")
         fig2.savefig(root + "_02" + ext, bbox_inches="tight")
+
+
+def plot_archive_tension(data: pd.DataFrame):
+    if "archive_tension" not in data.columns:
+        print("Archive Data missing!")
+        return
+
+    wire_indices = list(data.index)
+    tensions_arr = data[["wire_tension"]].to_numpy().flatten()
+    archive_tension = data[["archive_tension"]].to_numpy().flatten()
+
+    differences = list()
+    for i in wire_indices:
+        differences.append( archive_tension[i] - tensions_arr[i] )
+
+    mean_diff = np.mean(differences)
+    print(f"mean difference = {mean_diff:.4f} N")
+
+    fig, (ax1,ax2) = plt.subplots(2,1,sharex=True,height_ratios=[3,1],figsize=(10, 6))
+    ax1.plot(wire_indices, tensions_arr, ".-", linewidth=0.6, label="WTM Data")
+    ax1.plot(wire_indices, archive_tension, "+-", linewidth=0.6, label="Meteor Data")
+
+    ax2.plot(wire_indices, differences, ".-", linewidth=0.6, label="diff")
+
+    ax1.grid(True)
+    ax2.grid(True)
+    ax1.set_ylabel("Wire tension /N")
+    ax2.set_xlabel("Wire index")
+    ax2.set_ylabel("difference")
+
+    fig.tight_layout()
+
+
+    bins = np.arange(0.41, 0.56, 0.005).tolist()
+    fig_2, ax_2 = plt.subplots(figsize=(10, 6))
+    ax_2.hist(tensions_arr, bins=bins)
+    ax_2.hist(archive_tension, bins=bins)
 
 
 def plot_pitches_hist(
@@ -302,8 +365,12 @@ def test():
 
 if __name__ == "__main__":
     wtm_before = load_csv_to_df("data/2026_06_17-BP1-006/merged_result.csv")
-    wtm_after = load_csv_to_df("data/2026_09_15-BP1-006/merged_result.csv")
-    plot_before_after(wtm_before,wtm_after)
+    #wtm_after = load_csv_to_df("data/2026_09_15-BP1-006/merged_result.csv")
+    #plot_before_after(wtm_before,wtm_after)
+
+    wtm_with_archive = read_archive_tensions(wtm_before, "data/2026_06_17-BP1-006/26061513.13M", 0)
+    plot_archive_tension(wtm_with_archive)
+
     #filtered = filter_df(wtm_result)
     #plot_wire_tensions(wtm_result, title_info="Anode, BP1-006")
     #plot_pitches_hist(wtm_result)
