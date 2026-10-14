@@ -1,0 +1,401 @@
+"""
+This script reads raw data from a .tdms file that was created by the
+Wire Tension Measurement device at IKF.
+
+Created by Dennis Spicker 2026
+"""
+
+import logging
+import sys
+import os.path
+from nptdms import TdmsFile
+import re
+import datetime as dt
+import numpy as np
+from scipy.fft import fft, fftshift, fftfreq
+from scipy.signal import find_peaks
+from scipy.optimize import curve_fit
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
+
+DEBUG = False
+
+SAMPLING_RATE = 100.0e3  # 100 kHz
+""" Sampling rate of the ADC on the LabView card in Hz """
+
+g_wire_type = ""
+""" 'Anode' or 'Cathode' """
+
+g_wire_length = 0.0  # m
+""" 
+Free oscillating length of the measured wire.  
+On frame in Frankfurt: 1.4 m  
+In type 5 chamber: 0.960 m
+"""
+
+g_tdms_file_path = ""
+""" Asbolute path to the tdms file """
+
+""" --- Logging --- """
+LOG = logging.getLogger(__name__)
+LOG.setLevel(1)
+logging.captureWarnings(True)
+log_formatter = logging.Formatter("[ %(levelname)8s ] %(message)s ")
+log_formatter_file = logging.Formatter("%(asctime)s [ %(levelname)8s ] %(message)s ")
+log_terminal_handler = logging.StreamHandler(sys.stdout)
+log_terminal_handler.setFormatter(log_formatter)
+log_terminal_handler.setLevel("INFO")
+LOG.addHandler(log_terminal_handler)
+
+
+def main(tdms_file_path: str, wiretype: str = "Anode", wirelength: float = 1.4):
+
+    # Check args
+    working_dir, tdms_filename = check_main_args(tdms_file_path, wiretype, wirelength)
+
+    # Logging
+    log_filename = os.path.splitext(tdms_filename)[0] + "_unpack.log"
+    log_filepath = os.path.join(working_dir, log_filename)
+    log_file_handler = logging.FileHandler(log_filepath, "w", "utf-8")
+    log_file_handler.setFormatter(log_formatter_file)
+    log_file_handler.setLevel("INFO")
+    LOG.info(f"Creating logfile {log_filepath} ")
+    LOG.addHandler(log_file_handler)
+    LOG.info(f"Loading tdms file: {working_dir}/{tdms_filename} ")
+    LOG.info(f"Wiretype: {g_wire_type}, wirelength: {g_wire_length} m")
+
+    # Get Metadata
+    datetime_measured, num_wires, arr_wire_positions, arr_measure_duration = (
+        get_tdms_metadata(g_tdms_file_path)
+    )
+
+    # Calc pitches
+    arr_wire_pitches = calc_wire_pitches(arr_wire_positions)
+
+    # Read data and calculate tension for all wires
+    arr_wire_tensions, arr_tension_errors = start_analysis(
+        num_wires, arr_measure_duration
+    )
+
+
+def check_main_args(tdms_file_path: str, wiretype: str, wirelength: float):
+    tdms_file_path = os.path.abspath(tdms_file_path)
+    if not os.path.isfile(tdms_file_path):
+        raise FileNotFoundError(f"TDMS file not found! {tdms_file_path} ")
+    tdms_filename = os.path.basename(tdms_file_path)
+    tdms_dir = os.path.dirname(tdms_file_path)
+    global g_tdms_file_path
+    g_tdms_file_path = tdms_file_path
+
+    if wiretype not in ["Anode", "Cathode"]:
+        raise ValueError(f"Wiretype must be 'Anode' or 'Cathode', not {wiretype!r} .")
+    global g_wire_type
+    g_wire_type = wiretype
+
+    if wirelength > 3.0:
+        LOG.warning("Wire length more than 3 m. Is that correct?")
+    global g_wire_length
+    g_wire_length = wirelength
+
+    LOG.debug("check_main_args done")
+
+    return tdms_dir, tdms_filename
+
+
+""" ----------- Input functions ----------- """
+
+
+def get_tdms_metadata(tdms_file_path: str):
+    datetime_measured = dt.datetime.now()
+    num_wires = int(0)
+    arr_wire_positions: list[float] = list()
+    """ Position data precison 1 micrometer, real ca. 10 micrometer. """
+    arr_measure_duration: list[float] = list()
+    """ Duration of vibration measurement in s """
+    with TdmsFile.read_metadata(tdms_file_path) as tdms_file:
+        tdms_name = str(tdms_file.properties["name"])
+        datetime_re = re.search(r"WTD-Vibration-(\d{8}-\d{6})", tdms_name)
+        if datetime_re:
+            datetime_measured = dt.datetime.strptime(
+                datetime_re.group(1), "%Y%m%d-%H%M%S"
+            )
+        all_groups = tdms_file.groups()  # One group per wire
+        num_wires = len(all_groups)
+        LOG.info(f"Tdms file contains data for {num_wires} wires.")
+        for group in all_groups:
+            arr_wire_positions.append(group.properties["Position_m"])
+            arr_measure_duration.append(
+                group["Power_Spectrum"].properties["Duration_s"]
+            )
+
+    return datetime_measured, num_wires, arr_wire_positions, arr_measure_duration
+
+
+def get_tdms_spectrum(wire_no: int, tdms_file_path: str) -> np.ndarray:
+    """Read sensor data for the given wire from the file
+
+    Args:
+        wire_no (int): Wire index
+        tdms_file_path (str): TDMS File
+
+    Returns:
+        np.ndarray: Raw data 1D array with sampled sensor values
+    """
+    group_name = f"Wire_{wire_no}"
+    spectrum = None
+    with TdmsFile.open(tdms_file_path) as tdms_file:
+        spectrum = tdms_file[group_name]["AI_Subset"][:]
+    spectrum = spectrum[np.isfinite(spectrum)]  # get rid of nan entries
+    return spectrum
+
+
+def get_tdms_power_spectrum(wire_no: int, tdms_file_path: str) -> np.ndarray:
+    """Read fft result for the given wire from the file
+
+    Fourier transform is also done in Labview and stored here.
+
+    Args:
+        wire_no (int): Wire index
+        tdms_file_path (str): TDMS File
+
+    Returns:
+        np.ndarray: 1D Array with result of fourier transform
+    """
+    group_name = f"Wire_{wire_no}"
+    spectrum = None
+    with TdmsFile.open(tdms_file_path) as tdms_file:
+        spectrum = tdms_file[group_name]["Power_Spectrum"][:]
+    spectrum = spectrum[np.isfinite(spectrum)]  # get rid of nan entries
+    return spectrum
+
+
+""" ----------- Analysis Functions ----------- """
+
+
+def calc_wire_pitches(wire_positions: list[float]):
+    arr_wire_pitches: list[float] = list()
+    """ distance between the current and the next wire in mm """
+    for i in range(len(wire_positions) - 1):
+        pitch_i = (wire_positions[i + 1] - wire_positions[i]) * 1000.0
+        arr_wire_pitches.append(pitch_i)
+    arr_wire_pitches.append(np.nan)
+
+    return arr_wire_pitches
+
+
+def filter_spectrum(spectrum: np.ndarray):
+    # compute running mean over N samples:
+    N = 30
+    rm_spect = np.convolve(spectrum, np.ones(N) / N, mode="same")
+    return rm_spect
+
+
+def do_fft(spectrum: np.ndarray):
+    """Perform fast fourier transform on given data
+
+    Args:
+        spectrum (np.ndarray): Sensor data
+
+    Returns:
+        tuple(ndarray,ndarray): Frequency and Amplitude values of fft result
+    """
+    sample_spacing = 1.0 / SAMPLING_RATE  # seconds
+    fft_ampl = fftshift(fft(spectrum, norm="forward"))
+    fft_freq = fftshift(fftfreq(spectrum.size, sample_spacing))
+    nentries = spectrum.size // 2
+    fft_freq = fft_freq[nentries:]  # use only positive half of freq spectrum
+    fft_ampl = np.absolute(fft_ampl)[nentries:]
+    fft_ampl = fft_ampl / fft_ampl[0]  # normalization
+    if DEBUG:
+        freq_incr = fft_freq[1] - fft_freq[0]
+        LOG.debug(" -| do_fft()")
+        LOG.debug(f"  | frequency increment = {freq_incr:.3f} Hz")
+        LOG.debug(f"  | entries in frequency spectrum: {nentries}")
+
+    return fft_freq, fft_ampl
+
+
+def find_frequency(x_vals: np.ndarray, y_vals: np.ndarray):
+    """Find peak in the fft output and try to fit it
+
+    Args:
+        x_vals (np.ndarray): frequency output of fft
+        y_vals (np.ndarray): amplitude output of fft
+
+    Returns:
+        tuple(float,float, int): frequency, std, harmonic
+
+    Returns (0.0, 0.0, 0) if no peaks are found. Then it may be necessary
+    to adjust `search_interval` and the parameters of `find_peaks`
+    """
+    search_interval = [40.0, 350.0]  # Min and max frequency in Hz
+    search_indices = [
+        int(i // (x_vals[1] - x_vals[0])) for i in search_interval
+    ]  # indices of interval values
+    search_array = y_vals[search_indices[0] : search_indices[1]]
+    peaks_idx, _ = find_peaks(search_array, prominence=0.002, wlen=20, distance=50)
+    peaks_x = x_vals[peaks_idx + search_indices[0]]
+    peaks_y = y_vals[peaks_idx + search_indices[0]]
+
+    fig = None
+    ax = None
+    if DEBUG:
+        LOG.debug(f" -| find_frequency( x_vals[{x_vals.size}], y_vals[{y_vals.size}])")
+        LOG.debug(f"  | peaks x {peaks_x}")
+        LOG.debug(f"  | peaks y {peaks_y}")
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(x_vals, y_vals, ".-", linewidth=0.6)
+        ax.plot(peaks_x, peaks_y, "x")
+        ax.grid(True)
+        ax.set_yscale("log")
+        ax.set_xlim(-1.0, 501.0)
+        ax.set_title("Fast Fourier Transform of Signal")
+        ax.set_xlabel("Frequency /Hz")
+        ax.set_ylabel("Amplitude")
+        fig.tight_layout()
+
+    frequency: float = 0.0
+    freq_std: float = 0.0
+    harmonic: int = 0
+    if peaks_x.size >= 2:
+        harmonic = 2
+    elif peaks_x.size == 1:
+        harmonic = 1
+
+    # Try to fit the second harmonic, if that fails try the first harmonic.
+    # If that also fails, return just the peak position of the first peak.
+    # If no peaks where found at all, return zero
+    while harmonic > 0:
+        p_x = float(peaks_x[harmonic - 1])
+        p_y = float(peaks_y[harmonic - 1])
+        initial_params = np.array([p_y, p_x, 10])
+        try:
+            params, pcov = curve_fit(_gauss_func, x_vals, y_vals, initial_params)
+        except RuntimeError:  # Fit failed
+            harmonic -= 1  # try next harmonic
+            tqdm.write(" Fit in FFT failed. ")
+            if harmonic == 0:  # if this was already the last try, return peak pos
+                frequency = float(peaks_x[0])
+                harmonic = 1
+                break
+        else:  # Fit succeeded
+            perr = np.sqrt(np.diag(pcov))
+            frequency = float(params[1])
+            freq_std = float(params[2])
+
+            if DEBUG and ax:
+                fit_x = x_vals[
+                    int(params[1] - 5 * params[2]) : int(params[1] + 5 * params[2])
+                ]
+                fit_y = _gauss_func(fit_x, *params)
+                ax.plot(fit_x, fit_y)
+                LOG.debug(f"  | FFT-Fit succeeded for harmonic {harmonic} ")
+                LOG.debug(
+                    f"  | mu    = {float(params[1]):.3f} +- {float(perr[1]):.5f} Hz"
+                )
+                LOG.debug(
+                    f"  | sigma = {float(params[2]):.4f} +- {float(perr[2]):.6f} Hz"
+                )
+            break
+
+    return (frequency, freq_std, harmonic)
+
+
+def _gauss_func(x, a, mu, sigma):
+    return a * np.exp(-((x - mu) ** 2) / (2 * sigma**2))
+
+
+def calculate_wire_tension(frequency: float, harmonic: int = 2, freq_std: float = 0.0):
+    """Calculate the tension
+
+    Args:
+        wiretype (str): 'Anode' or 'Cathode
+        wirelength (float): Free oscillating length of the measured wire in m
+        frequency (float): Frequency from FFT in Hz
+        harmonic (int, optional): N'th harmonic from FFT. Defaults to 2.
+        freq_std (float, optional): Standard deviation of frequency for error calculation. Defaults to 0.0.
+
+    Returns:
+        tuple[float, float]: Tension and corresponding error. Unit: Newton
+    """
+    if g_wire_type == "Anode":
+        wire_rho = 19289.58  # kg / m^3
+        wire_radius = 10.055 * 10**-6  # m
+    elif g_wire_type == "Cathode":
+        wire_rho = 8230.22  # kg / m^3
+        wire_radius = 37.5 * 10**-6  # m
+    else:
+        wire_rho = 0.0  # kg / m^3
+        wire_radius = 0.0  # m
+
+    tension = (
+        4
+        * (frequency**2)
+        * (g_wire_length**2)
+        * wire_rho
+        * np.pi
+        * (wire_radius**2)
+        / (harmonic**2)
+    )
+
+    error = 0.0
+    if freq_std > 0.0:
+        error = abs(
+            8
+            * frequency
+            * (g_wire_length**2)
+            * wire_rho
+            * np.pi
+            * (wire_radius**2)
+            * freq_std
+            / (harmonic**2)
+        )
+    return (tension, error)  # Newton
+
+
+""" ----------- Steering functions ----------- """
+
+
+def analyse_tension(wire_no: int, measure_duration: float):
+    """Analyse data of one wire
+
+    Args:
+        wire_no (int): Wire index
+
+    Returns:
+        tuple[float,float]: Tension of the wire in newton, binszize in newton
+    """
+    spectrum = get_tdms_spectrum(wire_no, g_tdms_file_path)
+    x, y = do_fft(spectrum)
+    freq, std, harmonic = find_frequency(x, y)
+    if freq == 0.0:
+        LOG.error(f"Could not find frequency for wire No {wire_no}")
+        return (0.0, 0.0)
+    tension, errorbar = calculate_wire_tension(freq, harmonic, std)
+    if std == 0.0:  # use distance of values in fft
+        freq_binsize = 1.0 / measure_duration
+        tension_binsize, _ = calculate_wire_tension(freq + freq_binsize)
+        errorbar = tension_binsize - tension
+    return (tension, errorbar)
+
+
+def start_analysis(num_wires: int, arr_measure_durations: list):
+    """Main analysis loop"""
+    arr_wire_tensions = list()
+    arr_tension_errors = list()
+    tqdm.write("Analysing wire tensions. This may take some time... \n")
+    with logging_redirect_tqdm([LOG]):
+        for i in tqdm(range(num_wires)):
+            tension, binszize = analyse_tension(i, arr_measure_durations[i])
+            arr_wire_tensions.append(tension)
+            arr_tension_errors.append(binszize)
+
+    LOG.info("TDMS unpacking and analysis done.")
+
+    return arr_wire_tensions, arr_tension_errors
+
+
+if __name__ == "__main__":
+    main("data/2026_09_15-BP1-006/WTD-Vibration-20260916-150246.tdms", "Anode", 0.96)
